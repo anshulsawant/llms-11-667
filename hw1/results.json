@@ -13,24 +13,24 @@
             "score": 5,
             "status": "passed",
             "max_score": 5,
+            "name": "test_self_attention",
+            "output": "",
+            "visibility": "visible"
+        },
+        {
+            "score": 5,
+            "status": "passed",
+            "max_score": 5,
             "name": "test_mha_forward",
             "output": "",
             "visibility": "visible"
         },
         {
-            "score": 0,
-            "status": "failed",
-            "max_score": 5,
-            "name": "test_self_attention",
-            "output": "    @max_score(5)\n    def test_self_attention():\n        mha = MultiHeadAttention(d, h, 0.0)\n        x = torch.rand(b, s, d)\n        q, kT, v = mha.q_kT_v(x)\n        k = rearrange(kT, \"b h hd s -> b h s hd\")\n    \n        attn = mha.self_attention(q, kT, v)\n        attn_ref_multihead = F.scaled_dot_product_attention(q, k, v, is_causal=True)\n        attn_ref = rearrange(attn_ref_multihead, \"b h s hd -> b s (h hd)\")\n    \n        assert torch.allclose(attn, attn_ref, atol=1e-5, rtol=1e-3)\n    \n        x = torch.rand(2, 5, d)\n        q, kT, v = mha.q_kT_v(x)\n        k = rearrange(kT, \"b h hd s -> b h s hd\")\n        attention_mask = torch.tensor(\n            [[0.0, 0.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0, 1.0]]\n        )\n        attention_mask_with_causal = torch.tensor(\n            [\n                [\n                    [False, False, False, False, False],\n                    [False, False, False, False, False],\n                    [False, False, True, False, False],\n                    [False, False, True, True, False],\n                    [False, False, True, True, True],\n                ],\n                [\n                    [True, False, False, False, False],\n                    [True, True, False, False, False],\n                    [True, True, True, False, False],\n                    [True, True, True, True, False],\n                    [True, True, True, True, True],\n                ],\n            ]\n        )[:, None]\n>       attn = mha.self_attention(q, kT, v, attention_mask=attention_mask)\nNone\ntests/test_model.py:61:",
-            "visibility": "visible"
-        },
-        {
-            "score": 0,
-            "status": "failed",
+            "score": 5,
+            "status": "passed",
             "max_score": 5,
             "name": "test_lm_forward_on_cpu",
-            "output": "    @max_score(5)\n    def test_lm_forward_on_cpu():\n        # does not actually check whether the logits are correct\n        # just check if the code runs and the output size is right\n    \n        lm = DecoderLM(10, d, h, 128, 4)\n        lm.eval()\n        iids = torch.LongTensor([[3, 1, 4], [1, 5, 9]])\n>       logits = lm(iids)\nNone\ntests/test_model.py:88:",
+            "output": "",
             "visibility": "visible"
         }
     ]

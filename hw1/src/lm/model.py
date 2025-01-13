@@ -78,6 +78,7 @@ class MultiHeadAttention(nn.Module):
         """
 
         # compute the attention weights using q and kT
+        # B X H X S X S
         qkT = q @ kT
         unmasked_attn_logits = qkT * self.scale_factor
 
@@ -105,6 +106,8 @@ class MultiHeadAttention(nn.Module):
         Hint: torch.triu or torch.tril
         """
         batch_size, _, seq_len, _ = q.size()
+
+        ## S X S
         causal_mask = torch.tril(torch.ones((seq_len, seq_len))).to(device=q.device)
 
         """
@@ -146,10 +149,13 @@ class MultiHeadAttention(nn.Module):
         """
 
         if attention_mask is None:
+            ## S X S
             mask = causal_mask
         else:
+            # [S X S] * [B X S X  S] => [B X S X S]
             mask = causal_mask * torch.einsum('ij, ik -> ijk', attention_mask, attention_mask) 
-
+            # B X 1 X S X S to allow broadcast to B X H X S X S. Mask is constant across heads.
+            mask = mask.to(device=q.device, dtype=torch.bool).unsqueeze(1)
         """
         Fill unmasked_attn_logits with float_min wherever causal mask has value False.
 
@@ -280,6 +286,7 @@ class DecoderLM(nn.Module):
         self.p_dropout = p_dropout
 
         self.token_embeddings = nn.Embedding(n_vocab, n_embd)
+        self.linear = nn.Linear(n_embd, n_vocab)
         self.position_embeddings = nn.Embedding(n_positions, n_embd)
         self.blocks = nn.ModuleList(
             [DecoderBlock(n_embd, n_head) for _ in range(n_layer)]
