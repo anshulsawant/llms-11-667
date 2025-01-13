@@ -1,1 +1,1 @@
-TODO: Add index if notes and homeworks here.
+TODO: Add index of notes and homeworks here.
