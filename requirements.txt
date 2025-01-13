@@ -1,0 +1,11 @@
+torch == 2.2.2
+einops
+numpy
+pytest
+omegaconf
+tiktoken
+tqdm
+datasets
+wandb
+transformers
+rich
