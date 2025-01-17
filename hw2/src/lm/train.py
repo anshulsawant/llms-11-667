@@ -45,8 +45,11 @@ def random_batch_sampler(
         output tensor should be on the right device.
     """
 
+    max_idx = len(tokens) - seq_len
     while True:
-        yield ...
+        start_indices = torch.randint(0, max_idx + 1, (batch_size,))
+        batch = torch.stack([tokens[i:i + seq_len] for i in start_indices]).to(device)
+        yield batch
 
 
 def sequential_batch_sampler(
@@ -71,8 +74,11 @@ def sequential_batch_sampler(
         the last batch.
     """
 
-    for batch in ...:
-        yield ...
+    n_tokens = batch_size * seq_len
+    n_batches = len(tokens) // n_tokens
+    for batch in range(n_batches):
+        yield tokens[batch * n_tokens : (batch + 1) * n_tokens
+                     ].reshape((batch_size, seq_len)).to(device=device)
 
 
 def cosine_lr_schedule(
@@ -97,11 +103,12 @@ def cosine_lr_schedule(
         assert num_training_steps >= num_warmup_steps >= 0
 
         if t <= num_warmup_steps:
-            lr = ...
+            lr = max_lr * t/num_warmup_steps
         elif t >= num_training_steps:
-            lr = ...
+            lr = min_lr
         else:  # t >= num_training_steps
-            lr = ...
+            theta = math.pi * (t - num_warmup_steps) / (num_training_steps - num_warmup_steps)
+            lr = min_lr + (math.cos(theta) + 1) * (max_lr - min_lr) / 2
         return lr
 
     return get_lr
@@ -127,9 +134,19 @@ def compute_language_modeling_loss(
     Hint: Think about what are the groundtruth labels for next token prediction.
     """
 
-    labels = ...
-    logits = ...
-    return ...
+    batch_size = input_ids.size()[0]
+    seq_len = input_ids.size()[1]
+    # All but the first input token are predicted by the decoder.
+    labels = input_ids[:, 1:]
+    # logits is B X S X V. We don't have the ground truth for the last token. Ignore it.
+    shifted_logits = logits[:, :-1, :]
+    # Get log softmax long the last dim (for all logits for a give token).
+    log_probs = torch.log_softmax(shifted_logits, dim=-1)
+    device = input_ids.device
+    batch_index, seq_index = torch.meshgrid(torch.arange(batch_size), torch.arange(seq_len - 1))
+    batch_index = batch_index.to(device=device)
+    seq_index = seq_index.to(device=device)
+    return -torch.mean(log_probs[batch_index, seq_index, labels])
 
 
 def train(
@@ -159,20 +176,21 @@ def train(
 
     for step in (pbar := trange(num_training_steps)):
         t0 = time.time()
-        lr = ...
+        lr = lr_schedule(step)
         set_lr(optimizer, lr)
 
         for _ in range(grad_accumulation_steps):
             # TODO: sample a batch, generate logits and compute loss
-            input_ids = ...
+            input_ids = next(batch_sampler)
             with autocast:
-                logits = ...
-            loss = ...
+                logits = model(input_ids)
+            loss = compute_language_modeling_loss(input_ids, logits)
             (loss / grad_accumulation_steps).backward()
             loss_f = loss.item()
             losses.append(loss_f)
 
         # TODO: update the model using the accumulated gradients
+        optimizer.step()
         loss_mean = np.mean(losses).item()
 
         FLOPs_per_step = (
