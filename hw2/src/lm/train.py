@@ -143,7 +143,7 @@ def compute_language_modeling_loss(
     # Get log softmax long the last dim (for all logits for a give token).
     log_probs = torch.log_softmax(shifted_logits, dim=-1)
     device = input_ids.device
-    batch_index, seq_index = torch.meshgrid(torch.arange(batch_size), torch.arange(seq_len - 1))
+    batch_index, seq_index = torch.meshgrid(torch.arange(batch_size), torch.arange(seq_len - 1), indexing='ij')
     batch_index = batch_index.to(device=device)
     seq_index = seq_index.to(device=device)
     return -torch.mean(log_probs[batch_index, seq_index, labels])

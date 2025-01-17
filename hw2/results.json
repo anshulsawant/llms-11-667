@@ -1,0 +1,53 @@
+{
+    "stdout_visibility": "visible",
+    "tests": [
+        {
+            "score": 5,
+            "status": "passed",
+            "max_score": 5,
+            "name": "test_random_batch_sampler",
+            "output": "",
+            "visibility": "visible"
+        },
+        {
+            "score": 5,
+            "status": "passed",
+            "max_score": 5,
+            "name": "test_sequential_batch_sampler",
+            "output": "",
+            "visibility": "visible"
+        },
+        {
+            "score": 5,
+            "status": "passed",
+            "max_score": 5,
+            "name": "test_cosine_lr_schedule",
+            "output": "",
+            "visibility": "visible"
+        },
+        {
+            "score": 5,
+            "status": "passed",
+            "max_score": 5,
+            "name": "test_compute_language_modeling_loss",
+            "output": "",
+            "visibility": "visible"
+        },
+        {
+            "score": 5,
+            "status": "passed",
+            "max_score": 5,
+            "name": "test_train",
+            "output": "",
+            "visibility": "visible"
+        },
+        {
+            "score": 0,
+            "status": "passed",
+            "max_score": 0,
+            "name": "test_train_sanity_check",
+            "output": "",
+            "visibility": "visible"
+        }
+    ]
+}
