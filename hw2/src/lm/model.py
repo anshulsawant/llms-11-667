@@ -52,7 +52,7 @@ class MultiHeadAttention(nn.Module):
         head_dim = dim//self.n_head
         q = self.q_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2)
         kT = self.k_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2).transpose(2,3)
-        v = self.q_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2)
+        v = self.v_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2)
 
         return q, kT, v
 
