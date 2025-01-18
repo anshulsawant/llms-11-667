@@ -248,9 +248,9 @@ def main():
     os.makedirs(config.output_dir, exist_ok=True)
 
     run_name = f'{config.output_dir} {datetime.datetime.now()}';
-    OmegaConf.save(config, os.path.join(config.output_dir, "config.yaml"), name=run_name)
+    OmegaConf.save(config, os.path.join(config.output_dir, "config.yaml"))
     print("#" * 40, OmegaConf.to_yaml(config).strip(), "#" * 40, sep="\n")
-    wandb.init(project="llms-hw2", config=OmegaConf.to_container(config))
+    wandb.init(project="llms-hw2", config=OmegaConf.to_container(config), name=run_name)
 
     # initialize tokenizer and model
     tokenizer = tiktoken.get_encoding(config.tokenizer_encoding)
