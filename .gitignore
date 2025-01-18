@@ -172,3 +172,5 @@ cython_debug/
 
 # Latex aux file
 *.aux
+# Emacs backup files
+*~

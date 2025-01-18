@@ -247,7 +247,7 @@ def main():
     config = OmegaConf.load(sys.argv[1])
     os.makedirs(config.output_dir, exist_ok=True)
 
-    run_name = f'{config.output_dir} {datetime.now()}';
+    run_name = f'{config.output_dir} {datetime.datetime.now()}';
     OmegaConf.save(config, os.path.join(config.output_dir, "config.yaml"), name=run_name)
     print("#" * 40, OmegaConf.to_yaml(config).strip(), "#" * 40, sep="\n")
     wandb.init(project="llms-hw2", config=OmegaConf.to_container(config))
