@@ -10,4 +10,5 @@ conda activate cmu-11967-hw2
 pip install -r requirements.txt
 pip install -e .
 wandb login
+mkdir data
 curl https://huggingface.co/datasets/yimingzhang/llms-hw2/resolve/main/tokens.npz -o data/tokens.npz -L
