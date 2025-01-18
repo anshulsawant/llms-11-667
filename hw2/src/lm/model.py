@@ -226,13 +226,13 @@ class FeedForward(nn.Module):
 class DecoderBlock(nn.Module):
     """A single decoder block in a decoder language model."""
 
-    def __init__(self, n_embd: int, n_head: int):
+    def __init__(self, n_embd: int, n_head: int, p_dropout=0.1):
         """Initialize the modules used in a decoder block."""
         super().__init__()
 
         self.ln_1 = nn.LayerNorm(n_embd)
-        self.mha = MultiHeadAttention(n_embd, n_head)
-        self.ff = FeedForward(n_embd)
+        self.mha = MultiHeadAttention(n_embd, n_head, p_dropout=p_dropout)
+        self.ff = FeedForward(n_embd, p_dropout=p_dropout)
         self.ln_2 = nn.LayerNorm(n_embd)
 
     def forward(
@@ -290,7 +290,7 @@ class DecoderLM(nn.Module):
         self.linear.weight = self.token_embeddings.weight
         self.position_embeddings = nn.Embedding(n_positions, n_embd)
         self.blocks = nn.ModuleList(
-            [DecoderBlock(n_embd, n_head) for _ in range(n_layer)]
+            [DecoderBlock(n_embd, n_head, p_dropout) for _ in range(n_layer)]
         )
         self.ln = nn.LayerNorm(n_embd)
         self.dropout = nn.Dropout(self.p_dropout)
@@ -393,6 +393,7 @@ class DecoderLM(nn.Module):
         x = self.embed(input_ids, attention_mask)
         for block in self.blocks:
             x = block(x, attention_mask)
+        x = self.ln(x)
         logits = self.token_logits(x)
         return logits
 
