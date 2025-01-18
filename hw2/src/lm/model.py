@@ -150,10 +150,10 @@ class MultiHeadAttention(nn.Module):
 
         if attention_mask is None:
             ## S X S
-            mask = causal_mask
+            mask = causal_mask.to(dtype=torch.bool)
         else:
             # [S X S] * [B X S X  S] => [B X S X S]
-            mask = causal_mask * torch.einsum('ij, ik -> ijk', attention_mask, attention_mask) 
+            mask = torch.tril(torch.einsum('ij, ik -> ijk', attention_mask, attention_mask))
             # B X 1 X S X S to allow broadcast to B X H X S X S. Mask is constant across heads.
             mask = mask.to(device=q.device, dtype=torch.bool).unsqueeze(1)
         """
