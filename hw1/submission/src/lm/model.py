@@ -287,6 +287,7 @@ class DecoderLM(nn.Module):
 
         self.token_embeddings = nn.Embedding(n_vocab, n_embd)
         self.linear = nn.Linear(n_embd, n_vocab)
+        self.linear.weight = self.token_embeddings.weight
         self.position_embeddings = nn.Embedding(n_positions, n_embd)
         self.blocks = nn.ModuleList(
             [DecoderBlock(n_embd, n_head) for _ in range(n_layer)]
