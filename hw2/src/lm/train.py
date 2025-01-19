@@ -166,6 +166,7 @@ def train(
 
     for step in (pbar := trange(num_training_steps)):
         t0 = time.time()
+        optimizer.zero_grad()
         lr = lr_schedule(step)
         set_lr(optimizer, lr)
 
