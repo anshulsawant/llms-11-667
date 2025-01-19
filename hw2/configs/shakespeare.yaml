@@ -1,0 +1,15 @@
+output_dir: outputs/shakespeare
+grad_accumulation_steps: 1
+tokenizer_encoding: gpt2
+batch_size: 64
+device: auto
+model_config:
+  n_positions: 256 # context of up to 256 previous characters
+  n_layer: 6
+  n_head: 6
+  n_embd: 384
+seq_len: 256
+num_warmup_steps: 100
+num_training_steps: 5000
+min_lr: 1e-4 # learning_rate / 10 usually
+max_lr: 1e-3 # with baby networks can afford to go a bit higher
