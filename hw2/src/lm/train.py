@@ -136,19 +136,7 @@ def compute_language_modeling_loss(
     Hint: Think about what are the groundtruth labels for next token prediction.
     """
 
-    batch_size = input_ids.size()[0]
-    seq_len = input_ids.size()[1]
-    # All but the first input token are predicted by the decoder.
-    labels = input_ids[:, 1:]
-    # logits is B X S X V. We don't have the ground truth for the last token. Ignore it.
-    shifted_logits = logits[:, :-1, :]
-    # Get log softmax long the last dim (for all logits for a give token).
-    log_probs = torch.log_softmax(shifted_logits, dim=-1)
-    device = input_ids.device
-    batch_index, seq_index = torch.meshgrid(torch.arange(batch_size), torch.arange(seq_len - 1), indexing='ij')
-    batch_index = batch_index.to(device=device)
-    seq_index = seq_index.to(device=device)
-    return -torch.mean(log_probs[batch_index, seq_index, labels])
+    return F.cross_entropy(logits[:, :-1, :].reshape(-1, logits.size(-1)), input_ids[:, 1:].reshape(-1))
 
 
 def train(
