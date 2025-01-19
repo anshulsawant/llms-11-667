@@ -1,4 +1,5 @@
 output_dir: outputs/GPT-tiny  # <- where the output files are written
+input_file: tokens.npz
 tokenizer_encoding: gpt2      # <- the tokenizer encoding, used by tiktoken (YOU SHOULD NOT CHANGE THIS)
 model_config:
   n_embd: 32                  # <- dimension of token and positional embeddings 

@@ -1,4 +1,5 @@
 output_dir: outputs/shakespeare
+input_file: shakespeare.npz
 grad_accumulation_steps: 1
 tokenizer_encoding: gpt2
 batch_size: 64

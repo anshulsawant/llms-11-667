@@ -274,7 +274,9 @@ def main():
 
     # prepare data and data generator
     assert config.seq_len <= config.model_config.n_positions
-    tokens = np.load("data/tokens.npz")
+
+    input_file = config.get('input_file', 'tokens.npz')
+    tokens = np.load(os.path.join("data", input_file))
 
     train_tokens = torch.from_numpy(tokens["train"].astype(int))
     val_tokens = torch.from_numpy(tokens["val"].astype(int))
