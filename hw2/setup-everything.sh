@@ -5,7 +5,7 @@ rm -rf ~/cmu-llms/miniconda3/miniconda.sh
 ~/cmu-llms/miniconda3/bin/conda init bash
 source ~/.bashrc
 conda create --prefix=~/cmu-llms/cmu-11967-hw2 python=3.11
-conda config --append envs_dir ~/cmu-llms
+conda config --append envs_dirs ~/cmu-llms
 conda activate cmu-11967-hw2
 pip install -r requirements.txt
 pip install -e .
