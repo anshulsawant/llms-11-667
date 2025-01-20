@@ -3,6 +3,8 @@ import math
 import os
 import sys
 import time
+import random
+import itertools
 from collections import deque
 from collections.abc import Iterator
 from contextlib import nullcontext
@@ -226,6 +228,130 @@ def evaluate(
     }
     wandb.log(eval_results)
     return eval_results
+
+
+def load_model(config):
+    tokenizer = tiktoken.get_encoding(config.tokenizer_encoding)
+    device = determine_device() if config.device == "auto" else config.device
+    model = DecoderLM(tokenizer.n_vocab, **config.model_config).to(device)
+    print(f"model parameters = {count_params(model) / 1e6:.0f}M")
+
+    model_disk_size_MB = estimate_model_disk_size(model) * 1e-6
+    return model, model_disk_size_MB 
+
+
+def load_tokens():
+    input_file = 'tokens.npz'
+    tokens = np.load(os.path.join("data", input_file))
+
+    train_tokens = torch.from_numpy(tokens["train"].astype(int))
+    val_tokens = torch.from_numpy(tokens["val"].astype(int))
+    return train_tokens, val_tokens
+
+
+def estimate_flops(config, model, train_tokens):
+    return (
+        model.flops_per_token
+        * config.num_training_steps
+        * config.grad_accumulation_steps
+        * config.batch_size
+        * config.seq_len
+    )
+
+
+
+def product_dict(d):
+    res = []
+    keys = d.keys()
+    for instance in itertools.product(*d.values()):
+        res.append(dict(zip(keys, instance)))
+    return res
+
+
+def try_random_configs():
+    candidates = dict(
+        n_embd=[128, 256, 512],
+        n_head=[4, 8],
+        n_positions=[64, 128, 256, 512],
+        n_layer=[4, 6, 8],
+        batch_size=[128, 256, 512],
+        grad_accumulation_steps=[1],
+        min_lr=[1e-3, 1e-4, 1e-5])
+    configs = product_dict(candidates)
+    indices = random.shuffle(list(range(len(configs))))
+    tokenizer = tiktoken.get_encoding('gpt2')
+    device = determine_device()
+    train_tokens, val_tokens = load_tokens()
+    i = 0
+    for config in configs:
+        model = DecoderLM(tokenizer.n_vocab, **config.model_config).to(device)
+        model_disk_size_MB = estimate_model_disk_size(model) * 1e-6
+        ## We want the model to be as large as possible, but not any larger.
+        if model_disk_size_MB > 98 or model_disk_size_MB < 60:
+            print(f'Model too big or small, size: {model_disk_size_MB} MB.')
+            model = None
+            continue
+        config.output_dir = 'outputs/random-sweep/i'
+        os.makedirs(config.output_dir, exist_ok=True)
+        run_name = f'{config.output_dir} {datetime.datetime.now()}';
+        config.num_training_steps = (10e15//(model.flops_per_token*config.grad_accumulation_steps*config.batch_size*config.seq_len))
+        config.max_lr = config.min_lr * 10
+        config.num_warmup_steps = config.num_training_steps//10
+        config.seq_len = config.n_positions
+        train_sampler = random_batch_sampler(
+            train_tokens, device, config.batch_size, config.seq_len
+        )
+        val_sampler = sequential_batch_sampler(
+            val_tokens, device, config.batch_size, config.seq_len
+        )
+
+        # prepare optimizer and lr schedule
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=0.0,  # will set this dynamically in the training loop
+            betas=(0.9, 0.95),
+            fused=device == "cuda",
+        )
+        lr_schedule = cosine_lr_schedule(
+            config.num_warmup_steps, config.num_training_steps, config.min_lr, config.max_lr
+        )
+        autocast = (
+            torch.autocast(
+                device,
+                dtype=(torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32),
+            )
+            if device == "cuda"
+            else nullcontext()
+        )
+        # training
+        wandb.init(project="llms-hw2", config=OmegaConf.to_container(config), name=run_name)
+        model.train()
+        try:
+            train(
+                model,
+                train_sampler,
+                optimizer,
+                lr_schedule,
+                autocast,
+                config.num_training_steps,
+                config.grad_accumulation_steps,
+            )
+        except:
+            print('Training failed. Most likely OOM.')
+            wandb.finish(-1)
+            model = None
+            continue
+        # evaluation
+        model.eval()
+        eval_results = evaluate(model, val_sampler, autocast)
+        print("evaluation results:", json.dumps(eval_results))
+        with open(os.path.join(config.output_dir, "eval.json"), "w") as f:
+            json.dump(eval_results, f, indent=2)
+        wandb.finish(0)
+        print("done!")
+        i += 1
+        if i >= 50:
+            break
 
 
 def main():
