@@ -278,23 +278,28 @@ def try_random_configs():
         grad_accumulation_steps=[1],
         min_lr=[1e-3, 1e-4, 1e-5])
     configs = product_dict(candidates)
-    indices = random.shuffle(list(range(len(configs))))
+    random.shuffle(configs)
     tokenizer = tiktoken.get_encoding('gpt2')
     device = determine_device()
     train_tokens, val_tokens = load_tokens()
     i = 0
     for config in configs:
-        model = DecoderLM(tokenizer.n_vocab, **config.model_config).to(device)
+        config = OmegaConf.create(config)
+        model = DecoderLM(tokenizer.n_vocab,
+                          n_embd=config.n_embd,
+                          n_head=config.n_head,
+                          n_positions=config.n_positions,
+                          n_layer=config.n_layer).to(device)
         model_disk_size_MB = estimate_model_disk_size(model) * 1e-6
         ## We want the model to be as large as possible, but not any larger.
         if model_disk_size_MB > 98 or model_disk_size_MB < 60:
             print(f'Model too big or small, size: {model_disk_size_MB} MB.')
             model = None
             continue
-        config.output_dir = 'outputs/random-sweep/i'
+        config.output_dir = f'outputs/random-sweep/{i}'
         os.makedirs(config.output_dir, exist_ok=True)
         run_name = f'{config.output_dir} {datetime.datetime.now()}';
-        config.num_training_steps = (10e15//(model.flops_per_token*config.grad_accumulation_steps*config.batch_size*config.seq_len))
+        config.num_training_steps = int(1e15//(model.flops_per_token*config.grad_accumulation_steps*config.batch_size*config.seq_len))
         config.max_lr = config.min_lr * 10
         config.num_warmup_steps = config.num_training_steps//10
         config.seq_len = config.n_positions

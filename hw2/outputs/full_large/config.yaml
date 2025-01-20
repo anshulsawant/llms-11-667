@@ -1,0 +1,16 @@
+output_dir: outputs/full_large
+input_file: tokens.npz
+tokenizer_encoding: gpt2
+model_config:
+  n_embd: 256
+  n_head: 8
+  n_positions: 64
+  n_layer: 8
+device: auto
+batch_size: 256
+seq_len: 64
+num_warmup_steps: 1259
+num_training_steps: 12590
+grad_accumulation_steps: 4
+min_lr: 0.0005
+max_lr: 0.005

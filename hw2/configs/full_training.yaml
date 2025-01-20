@@ -1,0 +1,16 @@
+output_dir: outputs/full_training 
+input_file: tokens.npz
+tokenizer_encoding: gpt2         
+model_config:
+  n_embd: 256                   
+  n_head: 8                    
+  n_positions: 32             
+  n_layer: 4                      
+device: auto                 
+batch_size: 256             
+seq_len: 32                
+num_warmup_steps: 12590   
+num_training_steps: 125900
+grad_accumulation_steps: 1
+min_lr: 5e-4             
+max_lr: 5e-3            
