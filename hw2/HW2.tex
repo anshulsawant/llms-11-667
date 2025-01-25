@@ -72,7 +72,7 @@ Following trends are observerd:
 \item Large model dimension is preferred (256 over all others).
 \item Large batch size is preferred (128 or 256 over 32 or 64).
 \item Since the model is still pretty small, large learning rates are okay.
-\item While we would like batch size and model size to be as large as possible, these are counter balanced by limits on model size and GPU memory.
+\item While we would like batch size and model size to be as large as possible, these are counter balanced by the limits on model size and GPU memory.
 \end{enumerate}
 At the top end of the spectrum, validation perplexity ranged between 225 and 275.
 \subsection*{C}
@@ -95,7 +95,7 @@ grad_accumulation_steps: 1
 min_lr: 5e-4             
 max_lr: 5e-3            
 \end{verbatim}
-Thereafter, based on what I know about models and the patterns I saw from the random search, I decided to train a pretty much as large as possible model with a pretty big batch size (256 x 4 gradient accumulation steps). This lead to required performance. The model config is as follows:
+Thereafter, based on what I know about models and the patterns I saw from the random search, I decided to train a pretty much as large a model as possible with a pretty big batch size (256 x 4 gradient accumulation steps). This lead to required performance. The model config is as follows:
 \begin{verbatim}
 output_dir: outputs/full_large
 input_file: tokens.npz

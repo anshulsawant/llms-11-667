@@ -52,7 +52,7 @@ class MultiHeadAttention(nn.Module):
         head_dim = dim//self.n_head
         q = self.q_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2)
         kT = self.k_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2).transpose(2,3)
-        v = self.q_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2)
+        v = self.v_attn(x).view(batch_size, seq_len, self.n_head, head_dim).transpose(1,2)
 
         return q, kT, v
 
@@ -150,10 +150,10 @@ class MultiHeadAttention(nn.Module):
 
         if attention_mask is None:
             ## S X S
-            mask = causal_mask
+            mask = causal_mask.to(dtype=torch.bool)
         else:
             # [S X S] * [B X S X  S] => [B X S X S]
-            mask = causal_mask * torch.einsum('ij, ik -> ijk', attention_mask, attention_mask) 
+            mask = torch.tril(torch.einsum('ij, ik -> ijk', attention_mask, attention_mask))
             # B X 1 X S X S to allow broadcast to B X H X S X S. Mask is constant across heads.
             mask = mask.to(device=q.device, dtype=torch.bool).unsqueeze(1)
         """
@@ -393,6 +393,7 @@ class DecoderLM(nn.Module):
         x = self.embed(input_ids, attention_mask)
         for block in self.blocks:
             x = block(x, attention_mask)
+        x = self.ln(x)
         logits = self.token_logits(x)
         return logits
 
