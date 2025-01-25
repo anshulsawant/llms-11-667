@@ -31,6 +31,7 @@ def softmax_with_temperature(
     
     return F.softmax(logits / temperature, -1)
 
+
 class FakeModel:
     """ For dev. """
     def __init__(self, vocab_size):
