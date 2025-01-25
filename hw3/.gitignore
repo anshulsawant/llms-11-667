@@ -161,13 +161,7 @@ cython_debug/
 
 .vscode/
 .DS_Store
-data/*
-!data/prefixes.jsonl
-!data/english-tokenizer.json
-!data/hidden.npy
-!data/docs.jsonl
-!data/make_ppl_example_jsonl.py
-outputs/
+*.npz
 wandb/
 slurm*
 .ruff_cache/
