@@ -5,6 +5,7 @@ import math
 
 import tiktoken
 import torch
+import torch.nn.functional as F
 from omegaconf import OmegaConf
 from tqdm import trange
 from lm.model import DecoderLM
@@ -28,7 +29,20 @@ def softmax_with_temperature(
     # to avoid division by 0
     temperature = max(temperature, 1e-5)
     
-    return ...
+    return F.softmax(logits / temperature, -1)
+
+class FakeModel:
+    """ For dev. """
+    def __init__(self, vocab_size):
+        self.i = 0
+        self.vocab_size = vocab_size
+        
+    def forward(self, encoded, mask):
+        B = encoded.size(0)
+        S = encoded.size(-1)
+        token = torch.arange(self.i, self.i + B).view(encoded.size(0), -1)
+        y = F.one_hot(token.repeat((1, S)), num_classes=self.vocab_size)
+        return y
 
 
 @torch.inference_mode()
@@ -61,8 +75,34 @@ def generate(
         padding tokens, and 1.0 everywhere else.
     """
 
-    generations = ...
-    perplexity = ...
+    B = batch_size
+    N = len(prefixes)
+    neg_log_prob_sum = 0
+    generations = []
+    
+    for s in range(0, N, B):
+        bs = min(s + B, N) - s
+        encoded = tokenizer.encode_batch(prefixes[s:s + bs])
+        lens = [len(p) for p in prefixes[s:s + bs]]
+        min_len = min(lens)
+        max_len = max(lens)
+        encoded = [[tokenizer.eot_token] * (max_len - len(e)) + e for e in encoded]
+        encoded = torch.tensor(encoded).to(device=device)
+        mask = (encoded != tokenizer.eot_token).to(dtype=torch.float32).to(device=device)
+        gen = torch.zeros(bs, max_new_tokens).to(device=device)
+        for i in range(max_len, max_len + max_new_tokens):
+            logits = model.forward(encoded, mask)[:, i-1, :]
+            probs = softmax_with_temperature(logits, temperature).view(bs, -1)
+            samples = torch.multinomial(probs, num_samples=1).view(bs, -1)
+            neg_log_prob_sum += -torch.log(probs[torch.arange(bs).view(samples.size()), samples]).sum()
+            encoded = torch.cat((encoded, samples), 1)
+            mask = torch.cat((mask, torch.ones_like(samples)), 1) 
+        lens = torch.tensor(lens).view(-1, 1).to(device=device)
+        generated_tokens = encoded[:, max_len:(max_len + max_new_tokens)]
+        batch_gen = tokenizer.decode_batch(generated_tokens.tolist()) 
+        generations += batch_gen
+
+    perplexity = torch.exp(neg_log_prob_sum/(N * max_new_tokens)).item()
 
     print(f"Perplexity: {perplexity}")
     return generations
