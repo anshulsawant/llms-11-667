@@ -76,10 +76,12 @@ def generate(
         padding tokens, and 1.0 everywhere else.
     """
 
-    B = batch_size
     N = len(prefixes)
+    B = max(batch_size, N)
     neg_log_prob_sum = 0
     generations = []
+
+    print(f'batch_size: {batch_size}')
     
     for s in range(0, N, B):
         bs = min(s + B, N) - s
