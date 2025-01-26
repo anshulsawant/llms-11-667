@@ -81,8 +81,6 @@ def generate(
     neg_log_prob_sum = 0
     generations = []
 
-    print(f'batch_size: {batch_size}')
-    
     for s in range(0, N, B):
         bs = min(s + B, N) - s
         encoded = tokenizer.encode_batch(prefixes[s:s + bs])
