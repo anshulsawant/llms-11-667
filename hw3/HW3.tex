@@ -1,4 +1,4 @@
-% Created 2025-01-25 Sat 20:06
+% Created 2025-01-31 Fri 07:36
 % Intended LaTeX compiler: pdflatex
 \documentclass[11pt]{article}
 \usepackage[utf8]{inputenc}
@@ -28,11 +28,11 @@
 \tableofcontents
 
 \section{Homework 3}
-\label{sec:orge9e43a2}
+\label{sec:org0c0026f}
 \subsection{Question 1.2}
-\label{sec:org3200c17}
-\subsubsection{All the data pertaining to this question}
-\label{sec:org8791791}
+\label{sec:org157fc3e}
+\subsubsection{All the Generations}
+\label{sec:org4d41dfb}
 
 \textbf{Prefixes}
 \begin{enumerate}
@@ -91,18 +91,41 @@
 \end{enumerate}
 
 \subsubsection{A}
-\label{sec:org01e0ef8}
+\label{sec:org5f3fbb3}
+\textbf{Prefixes}
+\begin{enumerate}
+\item In the heart of the jungle
+\item The little red fox
+\item The year is 2342. Humanity has
+\end{enumerate}
+\textbf{Hyperparameter Settings}: \(T \in \{0.01, 0.5, 1.0\}\), \texttt{max\_new\_tokens = 32}.
+\subsubsection{B Effect of Temperature Increase}
+\label{sec:orgc379fde}
+Our model seems to make more sense closer to zero temperature. It also tends to be very repetitive at lower temperatures. Perplexity rises with temprature as expected.
+\subsubsection{C Comparison at Same Temprature}
+\label{sec:org7c68646}
+\begin{center}
+\begin{tabular}{ll}
+Our Model & Pythia\\[0pt]
+Is somewhat non-sensical at higher tempratures & Output is more sensible throughout\\[0pt]
+Is very confident (low ppx) at low tempratures & Is less confident at low temprature\\[0pt]
+Confidence drops sharply with temperature & Not as sharp a drop\\[0pt]
+\end{tabular}
+\end{center}
+\textbf{Reasons}: Our model has seen less data and has much diminished capacity. Hence, the distribution it has learned is more concentrated on just a few next tokens for each input. This leads to:
+\begin{enumerate}
+\item False confidence at low tempratures.
+\item Almost non-sensiscal output and low confidence at higher temperatures.
+\end{enumerate}
 
-\subsubsection{B}
-\label{sec:orge858c82}
 
 \subsection{Question 1.3}
-\label{sec:orgd47b0c8}
+\label{sec:org25dc90d}
 \subsubsection{A}
-\label{sec:orgfd82bf4}
-Perplexity of CMU Wiki paragraphs is 7.55 as is and 10.28 after removal of the/The.
+\label{sec:org12253df}
+Perplexity of CMU Wiki paragraphs is 7.55 as is and 10.28 after removal of the/The. The word "The" is, relatively, an easy word to predict. In addition, it is a very common word. Thus, perplexity drops upon its removal.
 
 \subsubsection{B}
-\label{sec:orga0e737a}
-Perplexity of Jabberwocky is 1.58 as is and 15.20 after substitution of gibberish words with gibberish words.
+\label{sec:org04a70a0}
+Perplexity of Jabberwocky is 1.58 as is and 15.20 after substitution of gibberish words with gibberish words. The likely reason for this is that Pythia has alreads seen the original poem and its oddity is what gives its predictions such high confidence. It is like memorizing by rote. Given that it has memorized the poem very well, the distribution it has learned in context of this poem is very peaked and this leads to the very high perlexity when we change the non-words. 
 \end{document}

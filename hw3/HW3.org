@@ -3,7 +3,7 @@
 #+DATE: <2025-01-25>
 * Homework 3
 ** Question 1.2
-*** All the data pertaining to this question
+*** All the Generations
 
 *Prefixes*
   1. In the heart of the jungle
@@ -48,12 +48,26 @@
  3. come under threat, as the Garmans move to eliminate all life at the cost of their lives. The Garmans have learned from the time they were
 
 *** A
+*Prefixes*
+  1. In the heart of the jungle
+  2. The little red fox
+  3. The year is 2342. Humanity has
+*Hyperparameter Settings*: $T \in \{0.01, 0.5, 1.0\}$, =max_new_tokens = 32=.
+*** B Effect of Temperature Increase
+Our model seems to make more sense closer to zero temperature. It also tends to be very repetitive at lower temperatures. Perplexity rises with temprature as expected.
+*** C Comparison at Same Temprature
+| Our Model                                      | Pythia                              |
+| Is somewhat non-sensical at higher tempratures | Output is more sensible throughout |
+| Is very confident (low ppx) at low tempratures | Is less confident at low temprature |
+| Confidence drops sharply with temperature      | Not as sharp a drop                 |
+*Reasons*: Our model has seen less data and has much diminished capacity. Hence, the distribution it has learned is more concentrated on just a few next tokens for each input. This leads to:
+1. False confidence at low tempratures.
+2. Almost non-sensiscal output and low confidence at higher temperatures.
 
-*** B
-
+ 
 ** Question 1.3
 *** A
-Perplexity of CMU Wiki paragraphs is 7.55 as is and 10.28 after removal of the/The.
+Perplexity of CMU Wiki paragraphs is 7.55 as is and 10.28 after removal of the/The. The word "The" is, relatively, an easy word to predict. In addition, it is a very common word. Thus, perplexity drops upon its removal.
 
 *** B
-Perplexity of Jabberwocky is 1.58 as is and 15.20 after substitution of gibberish words with gibberish words.
+Perplexity of Jabberwocky is 1.58 as is and 15.20 after substitution of gibberish words with gibberish words. The likely reason for this is that Pythia has alreads seen the original poem and its oddity is what gives its predictions such high confidence. It is like memorizing by rote. Given that it has memorized the poem very well, the distribution it has learned in context of this poem is very peaked and this leads to the very high perlexity when we change the non-words. 
