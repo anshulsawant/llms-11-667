@@ -1,0 +1,53 @@
+% Created 2025-02-08 Sat 14:18
+% Intended LaTeX compiler: pdflatex
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\author{Anshul}
+\date{\today}
+\title{}
+\hypersetup{
+ pdfauthor={Anshul},
+ pdftitle={},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 29.4 (Org mode 9.6.15)}, 
+ pdflang={English}}
+\begin{document}
+
+\tableofcontents
+
+\section{BPE Tokenizer}
+\label{sec:orgf18f7fa}
+\subsection{A: Counterexamples}
+\label{sec:org35199f9}
+In code.
+\subsection{B: Why is it generally impossible to build non-trivial rokenizers that preserve concatenation}
+\label{sec:org5ccc9dd}
+Because preserving concatenation implies that concatenation of letter by letter cocatenation is the same as concatenation of the letters. Thus, tokenise("Then") = tokenise("T") + tokenise("h") + tokenise("e") + tokenise("n"). Thus, tokenisation has to be some representation of the alphabet.
+\subsection{Q 1.3}
+\label{sec:org8ee3fe7}
+\subsubsection{Longest token}
+\label{sec:orgb6b869a}
+The longest token contains the word References. This is possibly a corpus of research papers.
+\subsubsection{How can BPE compromise privacy}
+\label{sec:org43e48c6}
+E.g., if corpus is medical history of a few patients, it may include patient names as part of tokenization.
+\subsection{Q 1.4 English vs Thai}
+\label{sec:org5583dfa}
+\subsection{A: Number of Tokens}
+\label{sec:org713fef9}
+Number of tokens used for English is 119 and number of tokens used for Thai is 636.
+\subsection{B: Effect of Small Corpus}
+\label{sec:org34c1043}
+If BPE is trained on a bigger corpus, it is likely to find useful compression of data based on language structure such as frequent words and freqeuent n-grams. However, a smaller corpus may lead to a tokenization that not representative of the content at large.  This is problematic because tokens will not correspond to language structure and this will make 1. Training more expensive (more tokens to represent the same information) 2. Will lose out on long range relationships (each batch will contain less information).
+\end{document}
