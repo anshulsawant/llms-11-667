@@ -55,7 +55,7 @@ if __name__ == "__main__":
     # To force the dataset to be recreated, you should pass in the
     # additional argument download_mode=datasets.DownloadMode.REUSE_CACHE_IF_EXISTS
     dataset = datasets.load_dataset(
-        "mini_ccc_solution.py",
+        "mini_ccc.py",
         "MiniCleanedCommonCrawl",
         trust_remote_code=True,
         split=datasets.Split.TRAIN)
