@@ -25,6 +25,8 @@ def test_replace_pii():
     expected2 = "Aria's phone number is +1 XXXXXXXXXX must be updated."
     result2 = replace_pii(testcase2) == expected2
 
+    print(replace_pii(testcase1))
+    print(replace_pii(testcase2))
     assert result1 or result2
 
 

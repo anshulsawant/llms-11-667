@@ -2,7 +2,7 @@ import json
 from warcio.archiveiterator import ArchiveIterator
 from typing import Optional, Iterator, Tuple
 
-BAD_WORD_LIST = '.bad_word_list.txt'
+BAD_WORD_LIST = 'bad_word_list.txt'
 
 
 def read_warc_file(fname: str, num_to_read: Optional[int] = None) -> Iterator[Tuple[str, str]]:
@@ -27,14 +27,31 @@ def read_warc_file(fname: str, num_to_read: Optional[int] = None) -> Iterator[Tu
                 break
 
 
-def read_wet_file(fname, num_to_read=None):
-    """Parses a wet file.
+def read_warc_file_url(fname, url):
+    """Parses a warc file.
     Args:
-        fname (str): File name of the WET file.
+        fname (str): File name of the WARC file.
         num_to_read (int, optional): Number of records to read. Useful for debugging. If None, reads all records.
 
     Returns:
-        An iterator yielding (URL, text) tuples.
+        An iterator yielding (URL, HTML content) tuples.
+    """
+
+    with open(fname, 'rb') as stream:
+        for record in ArchiveIterator(stream):
+            if (record.rec_type == 'response') and (record.http_headers.get_header('Content-Type') == 'text/html'):
+                if(url == record.rec_headers.get_header('WARC-Target-URI')):
+                    return record.content_stream().read()
+
+
+def read_wet_file(fname, num_to_read=None):
+    """Parses a warc file.
+    Args:
+        fname (str): File name of the WARC file.
+        num_to_read (int, optional): Number of records to read. Useful for debugging. If None, reads all records.
+
+    Returns:
+        str
     """
 
     count = 0
@@ -47,6 +64,22 @@ def read_wet_file(fname, num_to_read=None):
                 yield (url,  text)
             if num_to_read and count == num_to_read:
                 break
+
+
+def read_wet_file_url(fname, url):
+    """Parses a warc file.
+    Args:
+        fname (str): File name of the WARC file.
+
+    Returns:
+        str
+    """
+
+    with open(fname, 'rb') as stream:
+        for record in ArchiveIterator(stream):
+            if (record.rec_type == 'conversion') and (record.rec_headers.get_header('Content-Type') == 'text/plain'):
+                if(url == record.rec_headers.get_header('WARC-Target-URI')):
+                    return record.content_stream().read()
 
 
 def retrieve_bad_words():

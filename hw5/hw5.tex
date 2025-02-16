@@ -1,0 +1,178 @@
+% Created 2025-02-16 Sun 12:23
+% Intended LaTeX compiler: pdflatex
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\author{Anshul Sawant}
+\date{\today}
+\title{Homework 5}
+\hypersetup{
+ pdfauthor={Anshul Sawant},
+ pdftitle={Homework 5},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 29.4 (Org mode 9.6.15)}, 
+ pdflang={English}}
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+\section{Problem 1.1: Two Datasets}
+\label{sec:org06c1b54}
+\subsection{Dolma}
+\label{sec:org3742216}
+\subsubsection{A: Knowledge cutoff}
+\label{sec:org058539c}
+Depending on source varies from Apr 2019 to Oct 2023. Overall cutoff is Oct 2023.
+\subsubsection{B: Data source}
+\label{sec:org2fdadf5}
+Mix of web content, academic publications, code, books and encyclopedic materials.
+\subsubsection{C: Model trained on the dataset}
+\label{sec:org05835a2}
+OPT
+\subsubsection{D: Dataset license}
+\label{sec:org347690c}
+ODC-By. Different parts of dataset has different copyright protections. E.g., Arxiv (academic publications, most published under Creative Commons) vs Common crawl (web crawl, variable and/or unclear/unspecified copyrighting)
+\subsubsection{E: Task where trained model will do poorly}
+\label{sec:org3db87d9}
+\begin{enumerate}
+\item Tasks requiring up-to-date information.
+\item Reasoning tasks.
+\end{enumerate}
+
+\subsection{Project Gutenberg}
+\label{sec:org5860681}
+\subsubsection{A: Knowledge cutoff}
+\label{sec:org9a9eb65}
+Unclear, whatever was the publication date of the latest book. Most of the content would be decades old.
+\subsubsection{B: Data source}
+\label{sec:orgfb35e62}
+Uncopyrighted (in the US) books and books explicitly allowed by authors for use by the project.
+\subsubsection{C: Model trained on the dataset}
+\label{sec:orga23531c}
+It is part of Dolma. Hence any models trained on Dolma. It is probably a part of many other datasets as well.
+\subsubsection{D: Dataset license}
+\label{sec:org3870a95}
+Uncopyrighted work can be distributed freely by anyone. For works where authors grant permission to the project, redistribution is restricted. Does LLM's output count as a redistribution? Debatable.
+\subsubsection{E: Task where trained model will do poorly}
+\label{sec:org706643a}
+\begin{enumerate}
+\item Generating a blog post. The tone of blogs is very different from that of most books.
+\end{enumerate}
+
+\section{Problem 1.2: Three Models}
+\label{sec:org3f7f3d3}
+\subsection{A: Three models chosen}
+\label{sec:orgf0870b2}
+\href{https://huggingface.co/openai-community/gpt2}{GPT-2}, \href{https://huggingface.co/meta-llama/Llama-2-7b}{Llama-2}, \href{https://huggingface.co/facebook/opt-2.7b}{OPT}
+\subsection{B: Data training and processing}
+\label{sec:orgde65536}
+\subsubsection{GPT2}
+\label{sec:orgf63f995}
+\begin{enumerate}
+\item \textbf{Dataset}
+\label{sec:org60be80a}
+They scraped all the web pages from outbound links on Reddit which received at least 3 karma. Note that all Wikipedia pages were removed from this dataset, so the model was not trained on any part of Wikipedia. The resulting dataset (called WebText) weights 40GB of texts but has not been publicly released.
+\item \textbf{Processing}
+\label{sec:orgc4e9307}
+BPE with 50257 vocab size. Batch size of 1024 tokens.
+\end{enumerate}
+\subsubsection{LLaMA 2}
+\label{sec:org5f7c9fb}
+\begin{enumerate}
+\item \textbf{Dataset}
+\label{sec:org4081f69}
+Llama 2 was pretrained on 2 trillion tokens of data from publicly available sources. The fine-tuning data includes publicly available instruction datasets, as well as over one million new human-annotated examples. Neither the pretraining nor the fine-tuning datasets include Meta user data.
+\item \textbf{Processing}
+\label{sec:orge0c3a75}
+Could find no information on this.
+\end{enumerate}
+\subsubsection{OPT}
+\label{sec:org0b6403b}
+\begin{enumerate}
+\item \textbf{Dataset}
+\label{sec:org744137f}
+Consists of BookCorpus, CC-Stories, The Pile, Pushshift.io, CCNewsV2
+\item \textbf{Processing}
+\label{sec:org807cf4c}
+\begin{quote}
+The dataset was collected form internet, and went through classic data processing algorithms and re-formatting practices, including removing repetitive/non-informative text like Chapter One or This ebook by Project Gutenberg.
+\end{quote}
+GPT-2 BPE, batch size of 2048 tokens.
+\end{enumerate}
+\subsection{C: A use case for LLM trained on publicly accessible data}
+\label{sec:org265351b}
+\begin{enumerate}
+\item Publicly available datasets are often free or low-cost.
+\item Research uses, such as ablation studies (for outcomes such as bias etc.)
+\end{enumerate}
+\section{Problem 2.1}
+\label{sec:org1d44219}
+\subsection{A: Number of HTML pages}
+\label{sec:orgae95108}
+6368
+\subsection{B: Code and inline HTML}
+\label{sec:org33985d5}
+It parses it as is, retaining the white space formatting.
+\subsection{B: How does it handle HTML tags}
+\label{sec:orgdfa65bc}
+Pretty much removes all formatting tags (headings, tables, paragraphs etc). Ignores images. 
+\subsection{C: WET vs Cleaned HTML}
+\label{sec:orgc227387}
+The most significant differences I see is that
+\begin{enumerate}
+\item My \texttt{html\_to\_text} filters out non-roman alphabet languages.
+\item \texttt{html\_to\_text} has very permissive puntuation set. Therefore a lot of inline characters like \#\#, * etc make it into text.
+WET version is probably better because of more restrictive punctuation set. It may be better for multi-lingual training as well. But that depends on the use case.
+\end{enumerate}
+\section{Problem 2.2}
+\label{sec:orgce39251}
+\subsection{A: Documents Deleted}
+\label{sec:org1b48f74}
+2572, 40\% considered low quality
+\subsection{B: Low quality docs that passed the filter}
+\label{sec:org654531d}
+\begin{enumerate}
+\item \url{http://18ha.e11.tw/tag/869}
+It is mostly just URLs. Maybe lines that are just URLs must be filtered out.
+\item \url{http://101lab.net/blog/2004/06/post-276.html}
+This is mostly chinese characters intersperced with dates and []. Maybe have a more restrictive punctuation set, fiter out links and have some assertion on distribution of alphabets and numbers in a paragraph.
+\end{enumerate}
+\subsection{C: Non-english languages}
+\label{sec:orgb7a02f2}
+My filter tries to exclude all texts not in roman script.
+\subsection{D: Domain specific filtering}
+\label{sec:orge625a44}
+Coding domain will have different cleaning and fitering requirements. Depending on use case, we may want to remove comments. Filtering will certainly involve considering files names with certain extensions only.
+\subsection{E: Additional Data Filtering Stages}
+\label{sec:org39c42ae}
+\begin{enumerate}
+\item Language filtering (natural or coding)
+\item Classifier based quality filtering
+\item Deduplication (approximate or exact matching)
+\item Domain specific cleaning, possibly based on different word distributions.
+\end{enumerate}
+\section{Problem 2.3}
+\label{sec:orga90522c}
+\subsection{A: How long in seconds does it take to load the dataset?}
+\label{sec:org357f1b4}
+Around 270 seconds. Processing around 25 documents per second. For 3 billion documents this should take around 10\textsuperscript{8} seconds or around 3 years.
+\subsection{B: How to make it faster.}
+\label{sec:orga680ee4}
+2.1 Parallelize in one machine using threads
+2.2 Parallelize across machiens using Flume like frameworks
+2.3 Minimize processing done in Python. Instead use libraries where the core functionality is implemented in C and that can process entire document as a unit.
+\subsection{C: Advantage of using packing over padding}
+\label{sec:orgdad2343}
+One advantage is to minimize waste of training iterations on padded tokens. This is especially relevant for large models.
+\end{document}
