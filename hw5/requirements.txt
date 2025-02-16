@@ -1,0 +1,11 @@
+beautifulsoup4==4.12.3
+datasets==2.21.0
+gradescope-utils==0.5.0
+huggingface-hub==0.24.6
+regex==2024.7.24
+warcio==1.7.4
+typing
+bs4
+html2text
+nltk
+pytest

@@ -1,0 +1,7 @@
+# data
+data.warc
+data.wat
+data.wet
+__pycache__/
+*.pytest_cache/
+.DS_Store
