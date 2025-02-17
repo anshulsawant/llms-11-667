@@ -6,6 +6,7 @@ import bs4
 import string
 from tqdm import tqdm
 
+BAD_WORD_LIST = 'bad_word_list.txt'
 
 def compare(warc_file, wet_file, url, output_warc=False):
     warc = utils.read_warc_file_url(warc_file, url).decode()
@@ -71,7 +72,7 @@ def heuristic_quality_filter(text: str) -> bool:
     Returns:
         bool: returns True if the document passes the filters, False otherwise.
     """
-    bad_words = utils.retrieve_bad_words()  # Read the bad words list
+    bad_words = retrieve_bad_words()  # Read the bad words list
 
     sep = string.punctuation + string.whitespace
     words = {
@@ -144,3 +145,10 @@ if __name__ == "__main__":
         print(f"Total count: {count}, passed count: {passed_count}")
     else:
         print("Usage: python homework.py --fname data.warc")
+
+
+def retrieve_bad_words():
+    with open(BAD_WORD_LIST, 'r') as file:
+        records = file.read().strip().split('\n')
+        bad_words = [record.lower() for record in records]
+        return set(bad_words)
