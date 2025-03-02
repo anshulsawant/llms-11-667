@@ -1,0 +1,115 @@
+% Created 2025-03-02 Sun 14:31
+% Intended LaTeX compiler: pdflatex
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{wrapfig}
+\usepackage{rotating}
+\usepackage[normalem]{ulem}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{capt-of}
+\usepackage{hyperref}
+\author{Anshul Sawant}
+\date{\today}
+\title{Homework 6}
+\hypersetup{
+ pdfauthor={Anshul Sawant},
+ pdftitle={Homework 6},
+ pdfkeywords={},
+ pdfsubject={},
+ pdfcreator={Emacs 29.4 (Org mode 9.6.15)}, 
+ pdflang={English}}
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+
+\section{Question 1.1}
+\label{sec:org6cdec92}
+\subsection{Prompt}
+\label{sec:orgdc9bb8b}
+Sekou writes the numbers 15, 16,17,18,19. After he erases one of his numbers, the sum of the remaining four numbers is a multiple of 4. Which number did he erase? [AMC8 2025]
+\subsection{Model output}
+\label{sec:org1cd5cdd}
+First, calculate the sum of all the numbers Sekou wrote:
+
+\[ 
+15 + 16 + 17 + 18 + 19 = 85 
+\]
+
+Next, determine which number can be erased so that the sum of the remaining numbers is a multiple of 4. 
+
+Let's subtract each number from the total sum and check:
+
+\begin{itemize}
+\item Erasing 15: \(85 - 15 = 70\) (which is divisible by 4)
+\item Erasing 16: \(85 - 16 = 69\)
+\item Erasing 17: \(85 - 17 = 68\) (which is divisible by 4)
+\item Erasing 18: \(85 - 18 = 67\)
+\item Erasing 19: \(85 - 19 = 66\)
+\end{itemize}
+
+The sums 70 and 68 are multiples of 4. Sekou can erase either 15 or 17 to achieve this.
+
+\subsection{Result expected}
+\label{sec:org894735a}
+17
+
+\subsection{Relative error rate}
+\label{sec:orgef7f65b}
+One of the answers (15) is off by 11.76\%
+
+\subsection{Choice of model}
+\label{sec:orgc235704}
+GPT-4o
+
+\section{Question 1.3 B: Eval vs Safe Eval}
+\label{sec:org430e850}
+Eval will allow arbitrary python code to be executed. It may be possible to get model to generate dangerous python code, for example, via in-context learning.
+\section{Question 1.4: Accuracy with and without calculator}
+\label{sec:org0ec497c}
+Accuracy with calculator is 60.13\%. Accuracy without calculator is 35.22\%.
+
+\section{Question 1.5 A: Incorrect answer without calculator}
+\label{sec:org17892b7}
+\subsection{Prompt}
+\label{sec:org7e24f91}
+Question: Since the townspeople requested that he makes a chocolate cake, he will need 306 lbs. of cocoa powder.
+If the mayor already gave him 259 lbs., how much cocoa powder does he still need?
+Answer:
+\subsection{With calculator}
+\label{sec:orgb46ab4c}
+Question: Since the townspeople requested that he makes a chocolate cake, he will need 306 lbs. of cocoa powder.
+If the mayor already gave him 259 lbs., how much cocoa powder does he still need?
+Answer:\label{org9620837}47
+\subsection{Without calculator}
+\label{sec:org33d5440}
+Question: Since the townspeople requested that he makes a chocolate cake, he will need 306 lbs. of cocoa powder.
+If the mayor already gave him 259 lbs., how much cocoa powder does he still need?
+Answer:\label{org74db53a}13
+\subsection{Discussion}
+\label{sec:org0a07f88}
+While the model set up the computation correctly, it could not correctly compute the difference of the two numbers.
+
+\section{Question 1.5 B: Incorrect answer with calculator}
+\label{sec:orgca66291}
+\subsection{Prompt}
+\label{sec:org9d5eee1}
+Question: Each side of a square kitchen tile is 7 inches long. What is the tile's area?
+Answer:
+\subsection{With calculator}
+\label{sec:orgd90bee6}
+Question: Each side of a square kitchen tile is 7 inches long. What is the tile's area?
+Answer:\label{org5322700}28
+\subsection{Without calculator}
+\label{sec:org2a1d846}
+Question: Each side of a square kitchen tile is 7 inches long. What is the tile's area?
+Answer:\label{orgf4d1402}28
+\subsection{Discussion}
+\label{sec:orgfdd4b80}
+The model probably did not understand the concept of area.
+\end{document}

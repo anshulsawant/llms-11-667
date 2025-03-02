@@ -1,0 +1,67 @@
+#+TITLE: Homework 6
+#+AUTHOR: Anshul Sawant
+
+* Question 1.1
+** Prompt
+Sekou writes the numbers 15, 16,17,18,19. After he erases one of his numbers, the sum of the remaining four numbers is a multiple of 4. Which number did he erase? [AMC8 2025]
+** Model output
+First, calculate the sum of all the numbers Sekou wrote:
+
+\[ 
+15 + 16 + 17 + 18 + 19 = 85 
+\]
+
+Next, determine which number can be erased so that the sum of the remaining numbers is a multiple of 4. 
+
+Let's subtract each number from the total sum and check:
+
+- Erasing 15: \( 85 - 15 = 70 \) (which is divisible by 4)
+- Erasing 16: \( 85 - 16 = 69 \)
+- Erasing 17: \( 85 - 17 = 68 \) (which is divisible by 4)
+- Erasing 18: \( 85 - 18 = 67 \)
+- Erasing 19: \( 85 - 19 = 66 \)
+
+The sums 70 and 68 are multiples of 4. Sekou can erase either 15 or 17 to achieve this.
+
+** Result expected
+17
+
+** Relative error rate
+One of the answers (15) is off by 11.76%
+
+** Choice of model
+GPT-4o
+
+* Question 1.3 B: Eval vs Safe Eval
+Eval will allow arbitrary python code to be executed. It may be possible to get model to generate dangerous python code, for example, via in-context learning.
+* Question 1.4: Accuracy with and without calculator
+Accuracy with calculator is 60.13%. Accuracy without calculator is 35.22%.
+
+* Question 1.5 A: Incorrect answer without calculator
+** Prompt
+Question: Since the townspeople requested that he makes a chocolate cake, he will need 306 lbs. of cocoa powder.
+If the mayor already gave him 259 lbs., how much cocoa powder does he still need?
+Answer:
+** With calculator
+Question: Since the townspeople requested that he makes a chocolate cake, he will need 306 lbs. of cocoa powder.
+If the mayor already gave him 259 lbs., how much cocoa powder does he still need?
+Answer:<<306-259>>47
+** Without calculator
+Question: Since the townspeople requested that he makes a chocolate cake, he will need 306 lbs. of cocoa powder.
+If the mayor already gave him 259 lbs., how much cocoa powder does he still need?
+Answer:<<306-259>>13
+** Discussion
+While the model set up the computation correctly, it could not correctly compute the difference of the two numbers.
+
+* Question 1.5 B: Incorrect answer with calculator
+** Prompt
+Question: Each side of a square kitchen tile is 7 inches long. What is the tile's area?
+Answer:
+** With calculator
+Question: Each side of a square kitchen tile is 7 inches long. What is the tile's area?
+Answer:<<7*4>>28
+** Without calculator
+Question: Each side of a square kitchen tile is 7 inches long. What is the tile's area?
+Answer:<<7*4>>28
+** Discussion
+The model probably did not understand the concept of area.
