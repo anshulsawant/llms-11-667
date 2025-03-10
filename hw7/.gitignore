@@ -1,0 +1,6 @@
+.pytest_cache
+.env
+src/cmu_11967_hw7.egg-info
+src/*/__pycache__
+tests/__pycache__
+results.json

@@ -1,0 +1,8 @@
+torch == 2.0.1
+transformers
+pytest
+numpy < 2.0
+python-dotenv
+datasets
+openai
+litellm
