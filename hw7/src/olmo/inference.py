@@ -66,7 +66,7 @@ def generate_output(
 
 
 def main():
-    login()
+##    login()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model_type", 
