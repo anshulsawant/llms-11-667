@@ -9,12 +9,17 @@ from tqdm import tqdm
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from olmo.utils import determine_device
+from huggingface_hub import login
 
 
 MODEL_MAP = {
     "pretrained": "allenai/OLMo-7B-hf",
     "sft": "allenai/OLMo-7B-SFT-hf",
-    "instruct": "allenai/OLMo-7B-Instruct-hf"
+    "instruct": "allenai/OLMo-7B-Instruct-hf",
+    "llama": "meta-llama/Llama-3.1-8B-Instruct",
+    "gemma": "google/gemma-2-9b-it",
+    "tulu": "allenai/llama-3.1-tulu-2-8b",
+    "qwen" : "Qwen/Qwen2.5-7B-Instruct"
 }
 
 
@@ -61,6 +66,7 @@ def generate_output(
 
 
 def main():
+    login()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model_type", 
