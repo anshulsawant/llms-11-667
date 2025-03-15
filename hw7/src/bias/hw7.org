@@ -1,0 +1,5 @@
+* Q 2.3
+** Setting 1: seed=1000, num_shots=4, content_free_input = 'N/A'
+Uncalibrated accuracy: 0.9; Calibrated: 0.92
+** Setting 2: seed=2000, num_shots=4, content_free_input = 'N/A'
+Uncalibrated accuracy: 0.91; Calibrated: 0.89
