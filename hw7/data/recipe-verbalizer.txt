@@ -1,0 +1,28 @@
+Verbalizer 1
+
+Here's an example of a recipe:
+
+Dish: Spaghetti Carbonara
+
+Ingredients:
+- 8 ounces spaghetti
+- 4 ounces guanciale or pancetta, diced
+- 2 large eggs
+- 1 cup grated Pecorino Romano cheese
+- Freshly ground black pepper
+
+Instructions:
+1. Cook the spaghetti according to package directions.
+2. While the pasta cooks, sauté the guanciale or pancetta in a skillet until crispy.
+3. In a bowl, whisk together the eggs, Pecorino Romano cheese, and black pepper.
+4. Drain the spaghetti, reserving some pasta water.
+5. Add the spaghetti to the skillet with the guanciale or pancetta.
+6. Remove the skillet from heat and pour the egg mixture over the pasta, tossing quickly to coat. Add pasta water as needed to create a creamy sauce.
+7. Serve immediately, garnished with more Pecorino Romano cheese and black pepper.
+
+Now, provide a recipe for:
+
+Dish: [Your Dish Name]
+
+Verbalizer 2
+Please provide a recipe including ingredients and instructions for [Your Dish Name].
