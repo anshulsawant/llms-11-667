@@ -1,0 +1,22 @@
+#+AUTHOR: Anshul Sawant
+#+TITLE: Homework 8
+
+* Q 1.1
+** B
+It is sounder to use last-token pooling with decoder-only models because decoders process tokens left to right and a decoder would not have processed all of the input before the last token.
+
+* Q 1.4 Cross-encoding
+** A
+#+BEGIN_SRC python
+  def cross_encoder(query, passage):
+      reprs = encoder(query + '[SEP]' + passage)
+      similarity = Linear(reprs)
+      return similarity
+#+END_SRC
+
+** B
+*Advantage*: Higher accurary because jointly considering query and passages allows for more nuanced semantic relationships.
+*Disadvantage*: Each query-passage pair requires a forward pass of the encoder making it more expensive. A bi-encoder will requires $|Q| + |P|$ forward passes whereas, a cross-encoder will require $|Q| \times |P|$ forward passes.
+
+** C: Strategy to use both
+A candidate set can be retrieved using bi-encoder and then this smaller set can be re-ranked using cross-encoder.
