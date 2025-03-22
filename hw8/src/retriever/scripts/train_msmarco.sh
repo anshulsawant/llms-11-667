@@ -8,7 +8,7 @@ mkdir -p $trained_model_save_path
 trained_model_name=pythia-160m-1024-marco-docs-bow-contrastive-pretrain-marco-passage-sft
 training_data=Tevatron/msmarco-passage-aug
 
-python -m driver.train \
+python -m retriever.driver.train \
   --output_dir $trained_model_save_path/$trained_model_name \
   --model_name_or_path $model_to_train \
   --dataset_name $training_data \
