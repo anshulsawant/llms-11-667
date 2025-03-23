@@ -1,0 +1,11 @@
+torch~=2.4.1
+transformers
+peft
+datasets
+tqdm
+pandas
+numpy
+pytest
+ruff
+pytrec_eval
+accelerate
