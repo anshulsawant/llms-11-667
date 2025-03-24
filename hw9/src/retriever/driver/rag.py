@@ -196,15 +196,18 @@ def main():
 
         dataset = load_dataset('jmvcoelho/toy-corpus', split='train')
         
-        docid_to_text = {}
-        raise NotImplementedError()
-        #TODO: parse the huggingface dataset, and populate docid_to_text, mapping the document identifier to its repective content.
+        docid_to_text = dict(zip(dataset['docid'], dataset['text']))
 
         qid_to_topdocs = {}
 
         with open(args.augmentation_run, 'r') as h:
-            raise NotImplementedError()
-            #TODO: Read the run file, and populate qid_to_topdocs, mapping query ids to a list of top-document ids.
+            for line in h:
+                words = line.strip().split()
+                qid = words[0]
+                docid = words[2]
+                if qid not in qid_to_topdocs:
+                    qid_to_topdocs[qid] = []
+                qid_to_topdocs[qid].append(docid)
 
 
     else: # this means that RAG won't be performed.
