@@ -1,0 +1,21 @@
+{   
+    "model_to_train": "models/GPTNeoX-160m",
+    "output_dir": "models/GPTNeoX-160M-WikiText-512-eager",
+    "run_name": "GPTNeoX-160M-WikiText-512-eager",
+    "report_to": "wandb",
+    "eval_strategy": "epoch",
+    "logging_steps": 1,
+    "num_train_epochs": 1,
+    "save_strategy": "no",
+    "bf16": true,
+    "seq_len": 512,
+    "attention_type": "eager",
+    "gradient_checkpointing": false,
+    "dataset": "wikitext",
+    "deepspeed": null,
+    "per_device_train_batch_size": ...,
+    "learning_rate": ...,
+    "weight_decay": ...,
+    "warmup_ratio": ...,
+    "lr_scheduler_type": ...
+}
