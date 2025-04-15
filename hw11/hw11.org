@@ -1,3 +1,5 @@
+#+TITLE: Homework 11
+#+AUTHOR: Anshul Sawant
 * Q 1.1
 * A (coding)
 * B
@@ -14,7 +16,7 @@ The inference is faster with vLLM primarily because of PagedAttention and contin
 * Q 1.3
 ** A
 Allocating large chunk is not effective because:
-1. Wasted memory as most inference requests will require less K-V cache memory leading to lower throughput
+1. Wasted memory as most inference requests will require less K-V cache memory leading to lower throughput.
 2. Techniques that generate multiple output sequences (such as beam search) can potentially share parts (corresponding to the input sequence) of K-V cache. However, this cannot be done because of the seperate pre-allocation for each sequence.
 
 ** B
