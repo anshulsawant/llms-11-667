@@ -1,8 +1,8 @@
 #+TITLE: Homework 11
 #+AUTHOR: Anshul Sawant
 * Q 1.1
-* A (coding)
-* B
+** A (coding)
+** B
 [[./inference_comparison_plot.jpg]]
 
 The inference is faster with vLLM primarily because of PagedAttention and continuous batchingt.
