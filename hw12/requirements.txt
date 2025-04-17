@@ -1,4 +1,5 @@
 torch~=2.4.1
+trl
 transformers
 peft
 datasets

@@ -8,7 +8,7 @@ from transformers import (
     pipeline,
     logging,
 )
-from trl import SFTTrainer
+from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
 from huggingface_hub import login
 
 
@@ -16,8 +16,8 @@ model_id = "google/gemma-2-9b"
 
 dataset_name = "gsm8k"
 dataset_config = "main" # Or "socratic"
-new_model_name = "gemma-2-9b-gsm8k-full-sft" # Name for saving the fine-tuned model
-output_dir = "./results_full_ft" # Directory to save training results/checkpoints
+new_model_name = "gemma-2-9b-gsm8k-full-sft"
+output_dir = "./results_full_ft"
 
 print(f"Loading base model: {model_id}")
 compute_dtype = torch.bfloat16
@@ -67,15 +67,18 @@ training_arguments = TrainingArguments(
 )
 
 print("Initializing SFTTrainer for full fine-tuning...")
+collator = DataCollatorForCompletionOnlyLM("Answer:", tokenizer=tokenizer)
+config = SFTConfig(max_len=512)
 trainer = SFTTrainer(
+    args=config,
     model=model,
+    data_collator=collator,
     train_dataset=dataset["train"],
-    dataset_text_field="text",
     formatting_func=formatting_func,
     max_seq_length=512,
     tokenizer=tokenizer,
     args=training_arguments,
-    packing=False, # Set to True if you want to pack multiple short sequences together
+    packing=False,
 )
 
 # --- Start Training ---
@@ -83,5 +86,5 @@ print("Starting full fine-tuning...")
 trainer.train()
 
 print(f"Saving the full fine-tuned model to {new_model_name}...")
-trainer.save_model(new_model_name) # Saves the full model
-tokenizer.save_pretrained(new_model_name) # Save tokenizer alongside model
+trainer.save_model(new_model_name)
+tokenizer.save_pretrained(new_model_name)
