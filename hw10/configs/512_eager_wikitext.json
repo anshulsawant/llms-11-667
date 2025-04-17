@@ -13,10 +13,9 @@
     "gradient_checkpointing": false,
     "dataset": "wikitext",
     "deepspeed": null,
-    "per_device_train_batch_size": 16,
-    "learning_rate": 6e-4,
+    "per_device_train_batch_size": 64,
+    "learning_rate": 5e-5,
     "weight_decay": 0.01, 
     "warmup_ratio": 0.03,
-    "lr_scheduler_type": "cosine_with_min_lr",
-    "min_lr": 6e-5
+    "lr_scheduler_type": "cosine"
 }

@@ -1,26 +1,53 @@
+#+TITLE: Homework 10
+#+AUTHOR: Anshul Sawant
+
 * Q 1.1
 ** A
 - Validation ppx on 512-len: 38.64
 - Validation ppx on 2048-len: 136.35
 - Training time: 1025 seconds
 - GPU VRAM usage: ~ 16GB
+** B
+The difference is because:
+1. Positional embeddings are extrapolated beyond training length. This can potentially degrade performance as model hasn't seen these encodings during training.
+2. The model hasn't been trained to handle dependencies that span longer distances. Even though model does not know how to model these dependencies, the attention mechanism will still compute these attention scores.
+3. The above two factors combine to make the long sequence data, in effect, out of distribution data.
 
 * Q 1.2
-** A
+** A (coding)
+** B
 - Validation ppx on 512-len: 38.50
 - Validation ppx on 2048-len: 138.15
 - Training time: 696 seconds
 - GPU VRAM usage: ~ 12GB
+** C
+Speed-up achieved by Flash Attention is because of more efficient memory bandwidth utilization. Flash attention achieves this by
+1. Tiling with Kernel Fusion: computes attention one block at a time within SRAM reducing communication overhead between SRAM and HBM.
+2. Online softmax: keeps running sum for normalization (and the maximum for numerical stability), therefore the entire row is not required when computing softmax.
+
+Memory savings are achieved by recomputing attention scores on backward pass.
 
 * Q 1.3
 ** A
 - Both turned on: 21
 - Both turned off: 6
+** B
+Gradient checkpointing means storing activations for only a subset of layers during forward pass to save memory. During the backward pass, activations for other layers are recomputed as required.
+
+Gradient checkpointing reduces memory requirements while increasing computation during backward pass.
 ** C
 - Validation ppx on 512-len: 29.4
 - Validation ppx on 2048-len: 32.64
 - Training time: 728 seconds
 - GPU VRAM usage: ~ 32GB
+** D
+Validation perplexity for 2048 set decreased because now a part of model's training was done on 2048 length sequences.
+
 ** E
-Ppx after 1 training run: 48.25 and 53.82
-Ppx after 2 training runs: 31.43 and 34.85
+- Ppx after 1 training run: 48.25 and 53.82
+- Ppx after 2 training runs: 31.43 and 34.85
+
+After training a model for 1 epoch from scratch on 2048 length sequences, it does not do as well as the first model, probably because the original model has been trained longer (2 epochs). Therefore, this is not a very interesting comparison.
+
+
+After training a model from 2 epochs from scratch, we find that the original model still does slightly better. My hypothesis is that the orignal model does better because of curriculum learning. The first, less complex curriculum was 512 length sequences and then the 2048 training builds upon that.
