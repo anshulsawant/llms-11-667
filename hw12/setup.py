@@ -8,16 +8,9 @@ def read_requirements(filename: str):
             line = line.strip()
     return requirements
 
-main_ns = {}
-ver_path = convert_path('src/version.py')
-with open(ver_path) as ver_file:
-    exec(ver_file.read(), main_ns)
-
-
 setup(
     name="cmu-11967-hw12",
     author='Anshul Sawant',
-    version=main_ns['__version__'],
     packages=find_packages(where="src"),
     package_dir={'': 'src'},
     install_requires=read_requirements("requirements.txt"),
