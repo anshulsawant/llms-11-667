@@ -181,6 +181,7 @@ c. Find Inference Results
 The script overwrites the --input_file with results, adding the generation field. Make backups if needed.
 
 Example input_prompts.jsonl after running inference:
-
+```json
 {"id": 1, "question": "What is the capital of France?", "generation": " The capital of France is Paris."}
 {"id": 2, "question": "Solve for x: 2x + 5 = 15", "generation": " 2x = 15 - 5\n2x = 10\nx = 10 / 2\nx = 5\n#### 5"}
+```
