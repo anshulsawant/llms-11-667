@@ -1,12 +1,29 @@
-torch~=2.4.1
-trl
+# Core ML/DL Libraries
+torch
 transformers
-peft
-datasets
-tqdm
-pandas
-numpy
-pytest
-ruff
-pytrec_eval
 accelerate
+datasets
+evaluate
+
+# Configuration Management
+omegaconf
+pyyaml
+
+# Logging
+wandb
+
+# Optimizer & Precision specific
+bitsandbytes # Required for 8-bit optimizers like adamw_bnb_8bit
+
+# Tokenization & HF Hub Interaction
+sentencepiece # Often required for tokenizers (e.g., Gemma)
+huggingface_hub # For model downloads and login
+protobuf # Sometimes a dependency for tokenizers/models
+
+# --- Added for PEFT ---
+peft # Parameter-Efficient Fine-Tuning library
+
+# Add specific versions if needed for reproducibility, e.g.:
+# torch>=2.1.0
+# transformers>=4.38.0
+# peft>=0.9.0

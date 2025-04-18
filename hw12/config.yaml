@@ -1,0 +1,79 @@
+# config.yaml: Configuration for Supervised Fine-Tuning
+
+# --- New: Select Tuning Method ---
+tuning_method: "full" # Options: "full", "lora"
+
+# Model Configuration
+model:
+  name: "google/gemma-2-9b-it"
+  access_token: null # Replace with your token as a string: "hf_..." or set HF_TOKEN env var
+  trust_remote_code: true
+
+# Dataset Configuration
+dataset:
+  name: "gsm8k"
+  config_name: "main"
+  train_split: "train"
+  eval_split: "test[:100]"
+  prompt_format: "Question: {question}\nAnswer: "
+  response_template: "{answer}"
+  max_seq_length: 1024
+
+# Training Hyperparameters (Hugging Face TrainingArguments)
+training:
+  # Adjust output dir based on method? Or handle externally.
+  output_dir: "./sft_results" # Base directory; consider adding method name later
+  overwrite_output_dir: true
+  num_train_epochs: 1
+  per_device_train_batch_size: 1 # May be able to increase this significantly for LoRA
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 8
+  gradient_checkpointing: true # Still useful for activations, even with LoRA
+  learning_rate: 1e-5 # May need adjustment for LoRA (e.g., 1e-4 or 2e-4)
+  weight_decay: 0.01
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.03
+  logging_strategy: "steps"
+  logging_steps: 10
+  save_strategy: "steps"
+  save_steps: 100
+  evaluation_strategy: "steps"
+  eval_steps: 100
+  save_total_limit: 2
+  bf16: true
+  fp16: false
+  # Note: 8-bit Adam might not be strictly necessary for LoRA due to fewer trainable params,
+  # but doesn't hurt. Standard adamw_torch might also work well.
+  optim: "adamw_bnb_8bit"
+  seed: 42
+  report_to: ["wandb"]
+  # --- New: Optional Gradient Clipping ---
+  # max_grad_norm: 1.0 # Uncomment to enable gradient clipping
+
+# --- New: LoRA Configuration (only used if tuning_method is "lora") ---
+lora_config:
+  r: 16 # LoRA rank (e.g., 8, 16, 32, 64)
+  lora_alpha: 32 # Scaling factor (often 2*r)
+  lora_dropout: 0.05 # Dropout probability for LoRA layers
+  # Target modules for Gemma-like models (verify based on actual model architecture if needed)
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  bias: "none" # Whether to train bias parameters ("none", "all", "lora_only")
+  task_type: "CAUSAL_LM" # Important for PEFT library
+
+# WandB Configuration
+wandb:
+  project: "gemma-sft-gsm8k"
+  # Consider adding tuning_method to run name for clarity
+  run_name: "gemma-2-9b-it-gsm8k-run-1" # Append "-full" or "-lora" based on config?
+  watch: "gradients" # May not work well with LoRA, consider "false" or "all"
+  log_model: "checkpoint"
+
+# Evaluation Configuration
+evaluation:
+  max_new_tokens: 256
+  temperature: 0.1
+  do_sample: false
+  base_model_prompt_strategy: "zero_shot" # Options: "zero_shot", "one_shot"
+  one_shot_example:
+    question: "Angelo and Melanie want to plan how many hours over the next week they should study together for their test next week. They have 2 chapters of their textbook to study and 4 worksheets to complete. Angelo thinks they should study 30 minutes for each chapter of their textbook and 1 hour for each worksheet. Melanie thinks they should study 1 hour for each chapter and 45 minutes for each worksheet. If they study together for the whole time, what is the positive difference between the number of minutes they would study based on Angelo’s plan and the number of minutes they would study based on Melanie’s plan?"
+    answer: "Angelo's plan: 2 chapters * 30 min/chapter + 4 worksheets * 60 min/worksheet = 60 min + 240 min = 300 minutes.\nMelanie's plan: 2 chapters * 60 min/chapter + 4 worksheets * 45 min/worksheet = 120 min + 180 min = 300 minutes.\nThe difference is 300 - 300 = 0 minutes.\n#### 0"
