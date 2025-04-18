@@ -1,55 +1,56 @@
 # config_toy_lora.yaml: Overrides for quick E2E testing (LoRA SFT)
 # Merges with the base config.yaml
 
-tuning_method: "lora" # Ensure LoRA tuning is selected
+tuning_method: "lora"
 
 model:
-  name: "distilgpt2" # Override model
+  name: "distilgpt2"
   access_token: null
   trust_remote_code: false
 
 dataset:
-  # --- Override dataset splits for small subset ---
-  train_split: "train[:32]"
-  eval_split: "test[:16]"
+  train_split: "train" # Use base name
+  eval_split: "test"   # Use base name
+  # --- Specify subset sizes ---
+  num_train_samples: 32
+  num_eval_samples: 16
 
 training:
-  output_dir: "./sft_results_toy_lora" # Override output dir
-  num_train_epochs: 1 # Override epochs
-  per_device_train_batch_size: 8 # Override batch size (can be larger for LoRA)
+  output_dir: "./sft_results_toy_lora"
+  num_train_epochs: 1
+  per_device_train_batch_size: 8
   per_device_eval_batch_size: 16
-  gradient_accumulation_steps: 1 # Override accumulation
-  gradient_checkpointing: false # Override checkpointing
-  learning_rate: 1e-4 # Override learning rate (LoRA often uses higher LR)
-  lr_scheduler_type: "cosine" # Override scheduler
-  lr_scheduler_kwargs: null # Ensure no min_lr is passed if using standard cosine
-  warmup_ratio: 0.1 # Override warmup
-  logging_steps: 4 # Override logging steps
-  save_steps: 8 # Override save steps
-  evaluation_strategy: "steps" # Ensure evaluation happens
-  eval_steps: 8 # Override eval steps
-  save_total_limit: 1 # Override save limit
-  bf16: false # Override precision
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: false
+  learning_rate: 1e-4
+  lr_scheduler_type: "cosine"
+  lr_scheduler_kwargs: null # Ensure no min_lr is passed
+  warmup_ratio: 0.1
+  logging_steps: 4
+  save_steps: 8
+  evaluation_strategy: "steps"
+  eval_steps: 8
+  save_total_limit: 1
+  bf16: false
   fp16: false
-  optim: "adamw_torch" # Override optimizer
-  report_to: ["none"] # Override reporting (disable WandB)
+  optim: "adamw_torch"
+  report_to: ["none"]
 
-# --- Override LoRA config for the toy model ---
 lora_config:
-  r: 8 # Smaller rank for testing
+  r: 8
   lora_alpha: 16
   lora_dropout: 0.05
-  # Target modules common in GPT-2 like models
-  target_modules: ["c_attn", "c_proj"]
+  target_modules: ["c_attn", "c_proj"] # Adjusted for distilgpt2
   bias: "none"
   task_type: "CAUSAL_LM"
 
-wandb: # Override WandB settings
+wandb:
   project: "gemma-sft-gsm8k-test"
   run_name: "toy-distilgpt2-lora"
   watch: "false"
   log_model: "false"
 
 evaluation:
-  max_new_tokens: 128 # Override generation length
-  temperature: 0.7 # Override temperature
+  max_new_tokens: 128
+  temperature: 0.7
+  # one_shot_example: null # Inherits from base or set explicitly if needed
