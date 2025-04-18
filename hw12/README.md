@@ -121,10 +121,10 @@ Metrics: Saved in training.output_dir and logged to WandB.
 
 a. Prepare Input File
   Create a .jsonl file (e.g., input_prompts.jsonl) with prompts:
-
+```json
 {"id": 1, "question": "What is the capital of France?"}
 {"id": 2, "question": "Solve for x: 2x + 5 = 15"}
-
+```
 b. Run the Inference Script
 
   Example: Inference with a fully fine-tuned model:
