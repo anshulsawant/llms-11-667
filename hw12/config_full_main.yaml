@@ -1,0 +1,15 @@
+# Overrides for Full SFT on Main dataset config
+# Merges with config.yaml (base)
+
+tuning_method: "full"
+
+dataset:
+  config_name: "main" # Explicitly set main config
+
+training:
+  output_dir: "./sft_results_full_main" # Specific output directory
+
+wandb:
+  run_name: "gemma-2-9b-it-gsm8k-full-main" # Specific run name
+
+# No lora_config needed as tuning_method is full

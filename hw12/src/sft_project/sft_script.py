@@ -9,7 +9,9 @@ import transformers
 from accelerate import Accelerator, FullyShardedDataParallelPlugin
 from accelerate.utils import DistributedType
 from datasets import load_dataset, Dataset
-from omegaconf import OmegaConf, DictConfig, ListConfig # Import ListConfig for type checking
+# --- Updated OmegaConf import ---
+from omegaconf import OmegaConf, DictConfig, ListConfig, MissingMandatoryValue
+# --- End updated import ---
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -18,8 +20,19 @@ from transformers import (
     Trainer,
     set_seed,
     DataCollatorForLanguageModeling,
-    # No longer need explicit scheduler/optimizer imports here
+    SchedulerType # Keep for type hints maybe
 )
+# Import the specific scheduler function directly if needed
+try:
+    from transformers.optimization import get_cosine_with_min_lr_schedule_with_warmup
+except ImportError:
+    get_cosine_with_min_lr_schedule_with_warmup = None # Handle case where it might not exist
+
+from torch.optim import AdamW
+try:
+    import bitsandbytes as bnb
+except ImportError:
+    bnb = None
 
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training, TaskType
 
@@ -31,49 +44,86 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- Utility Functions ---
-def load_config(config_path: str = "config.yaml") -> DictConfig:
-    """Loads configuration from a YAML file using OmegaConf."""
-    logger.info(f"Loading configuration from: {config_path}")
+# --- Updated load_config function ---
+def load_config(override_config_path: str, base_config_path: str = "config.yaml") -> DictConfig:
+    """
+    Loads a base configuration and merges it with an override configuration.
+
+    Args:
+        override_config_path: Path to the specific configuration file (e.g., config_full_main.yaml).
+        base_config_path: Path to the base configuration file (defaults to config.yaml).
+
+    Returns:
+        The merged DictConfig object.
+    """
+    logger.info(f"Loading base configuration from: {base_config_path}")
     try:
-        conf = OmegaConf.load(config_path)
-        logger.info("Configuration loaded successfully.")
-        # Validations (keep previous)
-        if conf.evaluation.get("base_model_prompt_strategy") == "one_shot":
-            if not conf.evaluation.get("one_shot_example") or \
-               not conf.evaluation.one_shot_example.get("question") or \
-               not conf.evaluation.one_shot_example.get("answer"):
+        base_conf = OmegaConf.load(base_config_path)
+    except FileNotFoundError:
+        logger.error(f"Base configuration file not found at {base_config_path}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading base configuration: {e}")
+        raise
+
+    logger.info(f"Loading override configuration from: {override_config_path}")
+    try:
+        override_conf = OmegaConf.load(override_config_path)
+    except FileNotFoundError:
+        logger.error(f"Override configuration file not found at {override_config_path}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading override configuration: {e}")
+        raise
+
+    logger.info("Merging configurations...")
+    try:
+        # Merge base and override - override values take precedence
+        merged_conf = OmegaConf.merge(base_conf, override_conf)
+        logger.info("Configurations merged successfully.")
+
+        # --- Perform validation on the *merged* config ---
+        logger.info("Validating merged configuration...")
+        if merged_conf.evaluation.get("base_model_prompt_strategy") == "one_shot":
+            if not merged_conf.evaluation.get("one_shot_example") or \
+               not merged_conf.evaluation.one_shot_example.get("question") or \
+               not merged_conf.evaluation.one_shot_example.get("answer"):
                 logger.warning("One-shot incomplete. Defaulting to zero-shot.")
-        if conf.get("tuning_method") == "lora":
-             if not conf.get("lora_config"): raise ValueError("Missing lora_config for LoRA method.")
+        if merged_conf.get("tuning_method") == "lora":
+             if not merged_conf.get("lora_config"): raise ValueError("Missing lora_config for LoRA method.")
              req_lora = ['r', 'lora_alpha', 'target_modules', 'task_type']
-             missing = [p for p in req_lora if not conf.lora_config.get(p)]
+             missing = [p for p in req_lora if not merged_conf.lora_config.get(p)]
              if missing: raise ValueError(f"Missing required LoRA parameters: {missing}")
-             if conf.lora_config.task_type != "CAUSAL_LM": logger.warning("lora_config.task_type not CAUSAL_LM.")
-        # --- Validation for min_lr within lr_scheduler_kwargs ---
-        if conf.training.get("lr_scheduler_type") == "cosine_with_min_lr":
-             lr_kwargs = conf.training.get("lr_scheduler_kwargs")
-             # Check if kwargs exist and contain the expected key 'min_lr'
+             if merged_conf.lora_config.task_type != "CAUSAL_LM": logger.warning("lora_config.task_type not CAUSAL_LM.")
+        if merged_conf.training.get("lr_scheduler_type") == "cosine_with_min_lr":
+             lr_kwargs = merged_conf.training.get("lr_scheduler_kwargs")
              if lr_kwargs is None or lr_kwargs.get("min_lr") is None:
-                  # Allow None kwargs, scheduler might have default min_lr? Or raise error?
-                  # Let's warn for now if type is set but kwargs/min_lr missing
-                   logger.warning("lr_scheduler_type is 'cosine_with_min_lr' but 'lr_scheduler_kwargs.min_lr' is missing. Scheduler might use default behavior or fail.")
+                   logger.warning("lr_scheduler_type is 'cosine_with_min_lr' but 'lr_scheduler_kwargs.min_lr' is missing. Scheduler might use default.")
              elif not isinstance(lr_kwargs.min_lr, (float, int)) or lr_kwargs.min_lr < 0.0:
-                  logger.error(f"lr_scheduler_kwargs.min_lr ({lr_kwargs.min_lr}) must be a non-negative number.")
-                  raise ValueError("Invalid min_lr value in lr_scheduler_kwargs.")
-             elif lr_kwargs.min_lr >= conf.training.learning_rate:
-                  logger.warning(f"lr_scheduler_kwargs.min_lr ({lr_kwargs.min_lr}) is >= learning_rate ({conf.training.learning_rate}). Scheduler might not behave as expected.")
+                  raise ValueError("min_lr must be a non-negative number.")
+             elif lr_kwargs.min_lr >= merged_conf.training.learning_rate:
+                  logger.warning(f"lr_scheduler_kwargs.min_lr ({lr_kwargs.min_lr}) >= learning_rate.")
+        logger.info("Merged configuration validated.")
         # --- End validation ---
-        return conf
-    except FileNotFoundError: logger.error(f"Config file not found: {config_path}"); raise
-    except Exception as e: logger.error(f"Error loading configuration: {e}"); raise
+
+        return merged_conf
+    except MissingMandatoryValue as e:
+         logger.error(f"Missing mandatory value during merge or validation: {e}")
+         raise
+    except Exception as e:
+        logger.error(f"Error merging or validating configurations: {e}")
+        raise
+# --- End updated load_config function ---
+
 
 def init_wandb(cfg: DictConfig):
     # (Implementation remains the same)
     if "wandb" in cfg.training.report_to:
         logger.info("Initializing WandB...")
         try:
-            run_name = cfg.wandb.get("run_name", "sft-run")
-            if cfg.get("tuning_method"): run_name += f"-{cfg.tuning_method}"
+            run_name = cfg.wandb.get("run_name", "sft-run") # Use run_name from merged config
+            # No need to append method here if it's in the override config's run_name
+            # if cfg.get("tuning_method"): run_name += f"-{cfg.tuning_method}"
             wandb.init(project=cfg.wandb.project, name=run_name, config=OmegaConf.to_container(cfg, resolve=True), resume="allow")
             watch_log = cfg.wandb.get("watch", "gradients")
             if cfg.get("tuning_method") == "lora" and watch_log == "gradients": logger.warning("WandB watching gradients with LoRA might not be optimal.")
@@ -100,8 +150,8 @@ def format_prompt(example: Dict[str, Any], cfg: DictConfig) -> Dict[str, str]:
     return {"text": text, "prompt": prompt, "ground_truth_answer": example['answer']}
 
 def load_and_prepare_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dict[str, Any]:
-    # (Implementation remains the same)
-    logger.info(f"Loading dataset: {cfg.dataset.name} ({cfg.dataset.config_name})")
+    # (Implementation remains the same - uses config_name from merged cfg)
+    logger.info(f"Loading dataset: {cfg.dataset.name} ({cfg.dataset.config_name})") # Uses merged config_name
     dataset = load_dataset(cfg.dataset.name, cfg.dataset.config_name, token=cfg.model.access_token)
     logger.info("Formatting prompts...")
     formatted_dataset = dataset.map(lambda x: format_prompt(x, cfg), remove_columns=list(dataset[cfg.dataset.train_split].column_names))
@@ -112,6 +162,7 @@ def load_and_prepare_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dict[str
         tokenized_output["labels"] = tokenized_output["input_ids"].copy()
         return tokenized_output
     tokenized_datasets = formatted_dataset.map(tokenize_function, batched=True, remove_columns=["text"])
+    # Use train/eval splits defined in the merged config
     train_dataset = tokenized_datasets[cfg.dataset.train_split]
     trainer_eval_dataset = tokenized_datasets[cfg.dataset.eval_split].remove_columns(["prompt", "ground_truth_answer"])
     raw_eval_dataset_for_generation = formatted_dataset[cfg.dataset.eval_split]
@@ -120,7 +171,7 @@ def load_and_prepare_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dict[str
 
 # --- Model Loading ---
 def load_model_and_tokenizer(cfg: DictConfig) -> (AutoModelForCausalLM, AutoTokenizer):
-    # (Implementation remains the same)
+    # (Implementation remains the same - uses model name from merged cfg)
     logger.info(f"Loading base model: {cfg.model.name}")
     model_name = cfg.model.name; access_token = cfg.model.access_token; trust_remote_code = cfg.model.trust_remote_code
     model_kwargs = {"trust_remote_code": trust_remote_code, "token": access_token}
@@ -140,7 +191,7 @@ def load_model_and_tokenizer(cfg: DictConfig) -> (AutoModelForCausalLM, AutoToke
 # --- Evaluation ---
 @torch.no_grad()
 def evaluate_gsm8k( model: AutoModelForCausalLM, tokenizer: AutoTokenizer, dataset: Any, cfg: DictConfig, accelerator: Accelerator, is_base_model_eval: bool = False) -> Dict[str, float]:
-    # (Implementation remains the same)
+    # (Implementation remains the same - uses evaluation settings from merged cfg)
     eval_type = "Base Model" if is_base_model_eval else "Fine-Tuned Model"
     logger.info(f"--- Starting GSM8K evaluation for {eval_type} ---"); model.eval()
     prompts_base = dataset["prompt"]; ground_truths = dataset["ground_truth_answer"]
@@ -199,13 +250,14 @@ def evaluate_gsm8k( model: AutoModelForCausalLM, tokenizer: AutoTokenizer, datas
         if wandb.run: log_key_prefix = "eval/base_model_" if is_base_model_eval else "eval/sft_model_"; wandb.log({f"{log_key_prefix}gsm8k_exact_match": accuracy})
     accelerator.wait_for_everyone(); model.train(); return results
 
+
 # --- Training ---
 
-def train_model(cfg: DictConfig):
+def train_model(cfg: DictConfig): # Takes the merged config
     """Main function to orchestrate the SFT process."""
 
-    set_seed(cfg.training.seed)
-    is_wandb_initialized = init_wandb(cfg)
+    set_seed(cfg.training.seed) # Use seed from merged config
+    is_wandb_initialized = init_wandb(cfg) # Use wandb settings from merged config
 
     fsdp_plugin = None
     if Accelerator().distributed_type == DistributedType.FSDP:
@@ -213,11 +265,11 @@ def train_model(cfg: DictConfig):
     accelerator = Accelerator(fsdp_plugin=fsdp_plugin)
     logger.info(f"Accelerator initialized. Device: {accelerator.device}, Num Processes: {accelerator.num_processes}, Distributed Type: {accelerator.distributed_type}")
 
-    # Load base model and tokenizer
+    # Load base model and tokenizer using model settings from merged config
     with accelerator.main_process_first():
         model, tokenizer = load_model_and_tokenizer(cfg)
 
-    # Load Data
+    # Load Data using dataset settings from merged config
     with accelerator.main_process_first():
         datasets = load_and_prepare_data(cfg, tokenizer)
     train_dataset = datasets["train"]
@@ -236,16 +288,16 @@ def train_model(cfg: DictConfig):
     torch.cuda.empty_cache()
     # --- End Base Model Evaluation ---
 
-    # --- Apply PEFT if configured ---
-    tuning_method = cfg.get("tuning_method", "full")
+    # --- Apply PEFT if configured in merged config ---
+    tuning_method = cfg.get("tuning_method", "full") # Get method from merged config
     logger.info(f"Selected tuning method: {tuning_method}")
     if tuning_method == "lora":
          logger.info("Applying LoRA PEFT adapter...")
-         # Convert target_modules from OmegaConf ListConfig to Python list if necessary
+         # Use lora_config from merged config
          target_modules_list = list(cfg.lora_config.target_modules) if isinstance(cfg.lora_config.target_modules, ListConfig) else cfg.lora_config.target_modules
          peft_config = LoraConfig(
              r=cfg.lora_config.r, lora_alpha=cfg.lora_config.lora_alpha,
-             target_modules=target_modules_list, # Use Python list
+             target_modules=target_modules_list,
              lora_dropout=cfg.lora_config.lora_dropout, bias=cfg.lora_config.bias,
              task_type=getattr(TaskType, cfg.lora_config.task_type, TaskType.CAUSAL_LM)
          )
@@ -256,41 +308,33 @@ def train_model(cfg: DictConfig):
         logger.error(f"Unknown tuning_method '{tuning_method}'. Exiting.")
         return
 
-    # --- Set up Training Arguments ---
-    # Convert OmegaConf dictionary to standard dict for TrainingArguments
+    # --- Set up Training Arguments from merged config ---
     training_args_dict = OmegaConf.to_container(cfg.training, resolve=True)
 
-    # Handle lr_scheduler_kwargs specifically - ensure it's a dict
+    # Handle lr_scheduler_kwargs specifically
     if "lr_scheduler_kwargs" in training_args_dict and training_args_dict["lr_scheduler_kwargs"] is not None:
          if not isinstance(training_args_dict["lr_scheduler_kwargs"], dict):
-             try:
-                 # Convert if it looks like a dict structure from OmegaConf
-                 training_args_dict["lr_scheduler_kwargs"] = dict(training_args_dict["lr_scheduler_kwargs"])
-             except (TypeError, ValueError):
-                 logger.error("Could not convert lr_scheduler_kwargs to dict. Removing.")
-                 del training_args_dict["lr_scheduler_kwargs"]
-         # Ensure the key 'min_lr' exists if type is cosine_with_min_lr (validation done in load_config)
+             try: training_args_dict["lr_scheduler_kwargs"] = dict(training_args_dict["lr_scheduler_kwargs"])
+             except (TypeError, ValueError): logger.error("Could not convert lr_scheduler_kwargs to dict. Removing."); del training_args_dict["lr_scheduler_kwargs"]
          if training_args_dict.get("lr_scheduler_type") == "cosine_with_min_lr":
-              if "min_lr" not in training_args_dict["lr_scheduler_kwargs"]:
-                   logger.warning("min_lr not found in lr_scheduler_kwargs despite scheduler type. Scheduler might use default.")
+              if "min_lr" not in training_args_dict["lr_scheduler_kwargs"]: logger.warning("min_lr not found in lr_scheduler_kwargs.")
 
-    # Remove min_lr from top level if it exists (should be inside kwargs now)
-    if "min_lr" in training_args_dict:
-        del training_args_dict["min_lr"]
+    # Remove min_lr from top level if it exists
+    if "min_lr" in training_args_dict: del training_args_dict["min_lr"]
 
     logger.info("Initializing Training Arguments...")
+    # Use output_dir specified in the merged config (potentially overridden)
     training_args = TrainingArguments(**training_args_dict)
 
     # --- Initialize Trainer (Using standard init) ---
     logger.info("Initializing Trainer...")
     trainer = Trainer(
         model=model,
-        args=training_args, # Trainer uses args to create optimizer/scheduler
+        args=training_args, # Trainer uses args from merged config
         train_dataset=train_dataset,
         eval_dataset=trainer_eval_dataset,
         tokenizer=tokenizer,
         data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
-        # optimizers=(optimizer, lr_scheduler) # REMOVED - Trainer handles it
     )
 
     # --- Train ---
@@ -302,15 +346,14 @@ def train_model(cfg: DictConfig):
 
         if accelerator.is_main_process:
             logger.info("Saving final model/adapter...")
-            # Use output_dir from TrainingArguments which might have method appended
+            # Use output_dir from TrainingArguments which comes from merged config
             final_save_path = os.path.join(training_args.output_dir, f"final_checkpoint")
             os.makedirs(final_save_path, exist_ok=True)
 
             trainer.save_model(final_save_path)
-            # Save tokenizer explicitly, especially needed for LoRA where only adapter is saved by default
-            tokenizer.save_pretrained(final_save_path)
-            try: OmegaConf.save(cfg, os.path.join(final_save_path, "training_config.yaml"))
-            except Exception as e_save: logger.error(f"Failed to save training config: {e_save}")
+            tokenizer.save_pretrained(final_save_path) # Save tokenizer explicitly
+            try: OmegaConf.save(cfg, os.path.join(final_save_path, "training_config_merged.yaml")) # Save the *merged* config
+            except Exception as e_save: logger.error(f"Failed to save merged training config: {e_save}")
 
             logger.info(f"Final model/adapter saved to {final_save_path}")
             trainer.log_metrics("train", metrics)
@@ -344,8 +387,23 @@ def train_model(cfg: DictConfig):
 # --- Main Execution ---
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Supervised Fine-Tuning Script")
-    parser.add_argument("--config", type=str, default="config.yaml", help="Path to the configuration YAML file.")
+    parser = argparse.ArgumentParser(description="Supervised Fine-Tuning Script with Merged Config")
+    parser.add_argument(
+        "--config", # This now points to the OVERRIDE config
+        type=str,
+        required=True, # Make override config required
+        help="Path to the override configuration YAML file (e.g., config_full_main.yaml).",
+    )
+    parser.add_argument(
+        "--base_config",
+        type=str,
+        default="config.yaml", # Assumes base config is named config.yaml
+        help="Path to the base configuration YAML file.",
+    )
     args = parser.parse_args()
-    config = load_config(args.config)
+
+    # Load and merge configurations
+    config = load_config(override_config_path=args.config, base_config_path=args.base_config)
+
+    # Start the training process
     train_model(config)

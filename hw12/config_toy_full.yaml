@@ -1,0 +1,47 @@
+# config_toy_full.yaml: Overrides for quick E2E testing (Full SFT)
+# Merges with the base config.yaml
+
+tuning_method: "full" # Ensure full tuning is selected
+
+model:
+  name: "distilgpt2" # Override model
+  access_token: null
+  trust_remote_code: false
+
+dataset:
+  # --- Override dataset splits for small subset ---
+  train_split: "train[:32]"
+  eval_split: "test[:16]"
+
+training:
+  output_dir: "./sft_results_toy_full" # Override output dir
+  num_train_epochs: 1 # Override epochs
+  per_device_train_batch_size: 4 # Override batch size
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 1 # Override accumulation
+  gradient_checkpointing: false # Override checkpointing
+  learning_rate: 5e-5 # Override learning rate (if different from base)
+  lr_scheduler_type: "cosine" # Override scheduler (if different)
+  lr_scheduler_kwargs: null # Ensure no min_lr is passed if using standard cosine
+  warmup_ratio: 0.1 # Override warmup
+  logging_steps: 4 # Override logging steps
+  save_steps: 8 # Override save steps
+  evaluation_strategy: "steps" # Ensure evaluation happens
+  eval_steps: 8 # Override eval steps
+  save_total_limit: 1 # Override save limit
+  bf16: false # Override precision
+  fp16: false
+  optim: "adamw_torch" # Override optimizer
+  report_to: ["none"] # Override reporting (disable WandB)
+
+# lora_config is ignored as tuning_method is full
+
+wandb: # Override WandB settings
+  project: "gemma-sft-gsm8k-test"
+  run_name: "toy-distilgpt2-full"
+  watch: "false"
+  log_model: "false"
+
+evaluation:
+  max_new_tokens: 128 # Override generation length
+  temperature: 0.7 # Override temperature

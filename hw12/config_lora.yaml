@@ -1,5 +1,9 @@
 # config.yaml: Configuration for Supervised Fine-Tuning
 
+# --- New: Select Tuning Method ---
+tuning_method: "lora" # Options: "full", "lora"
+# config.yaml: Configuration for Supervised Fine-Tuning
+
 tuning_method: "full" # Options: "full", "lora"
 
 model:
@@ -65,7 +69,7 @@ evaluation:
   max_new_tokens: 256
   temperature: 0.1
   do_sample: false
-  base_model_prompt_strategy: "one_shot"
+  base_model_prompt_strategy: "zero_shot"
   # --- Updated: Shorter One-Shot Example ---
   one_shot_example:
     question: "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
