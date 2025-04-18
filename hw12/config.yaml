@@ -10,14 +10,11 @@ model:
 dataset:
   name: "gsm8k"
   config_name: "main"
-  train_split: "train" # Base split name
-  eval_split: "test"  # Base split name
-  # --- Optional subset sizes ---
-  num_train_samples: null # Use null or omit to use full train split
-  num_eval_samples: 100   # Number of eval samples to select
-  # --- Control how eval subset is selected ---
-  eval_random_subset: true # Set to true to randomly sample num_eval_samples
-  # --- End eval subset control ---
+  train_split: "train"
+  eval_split: "test"
+  num_train_samples: null
+  num_eval_samples: 100
+  eval_random_subset: true
   prompt_format: "Question: {question}\nAnswer: "
   response_template: "{answer}"
   max_seq_length: 1024
@@ -37,16 +34,15 @@ training:
     min_lr: 1e-6
   warmup_ratio: 0.03
   logging_strategy: "steps"
-  logging_steps: 10
+  logging_steps: 1
   save_strategy: "steps"
   save_steps: 100
-  evaluation_strategy: "steps"
-  eval_steps: 100
+  eval_strategy: "no"
   save_total_limit: 2
   bf16: true
   fp16: false
   optim: "adamw_bnb_8bit"
-  seed: 42 # Seed used for shuffling if eval_random_subset is true
+  seed: 42
   report_to: ["wandb"]
   # max_grad_norm: 1.0
 
@@ -64,7 +60,7 @@ wandb:
   watch: "gradients"
   log_model: "checkpoint"
 
-evaluation:
+evaluation: # Settings used by evaluate_gsm8k in sft_script.py
   max_new_tokens: 256
   temperature: 0.1
   do_sample: true
@@ -72,3 +68,18 @@ evaluation:
   one_shot_example:
     question: "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
     answer: "Natalia sold 48 clips in April.\nIn May, she sold half as many clips as in April, so she sold 48 / 2 = 24 clips.\nAltogether, Natalia sold 48 + 24 = 72 clips.\n#### 72"
+
+# --- Updated inference section ---
+inference:
+  # --- Add paths and fields here ---
+  input_file: "data/inference_input.jsonl" # Default input file path
+  output_dir: "./inference_outputs"      # Default output directory
+  prompt_field: "question"                # Default input field name
+  output_field: "generation"              # Default output field name
+  # --- End added paths/fields ---
+  precision: "bf16"
+  batch_size: 4
+  max_new_tokens: 256
+  temperature: 0.1
+  do_sample: true
+# --- End inference section ---
