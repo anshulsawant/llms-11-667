@@ -4,7 +4,7 @@ This project performs supervised fine-tuning (SFT) of a large language model usi
 
 ## Project Structure
 
-
+```text
 your_project_root/
 ├── src/
 │   └── sft_project/       # Python package source code
@@ -15,45 +15,49 @@ your_project_root/
 ├── requirements.txt       # Python dependencies
 ├── setup.py               # Package setup script
 └── README.md              # This file
-
+```
 
 ## 1. Setup Instructions
 
 Follow these steps to set up your environment:
 
-**a. Clone the Repository (if applicable)**
+a. Clone the Repository (if applicable)**
 ```bash
 git clone <your-repository-url>
 cd your_project_root
+```
 
 b. Create a Virtual Environment
 It's highly recommended to use a virtual environment:
-
+```bash
 python -m venv venv
 source venv/bin/activate  # On Windows use `venv\Scripts\activate`
-
+```
 c. Install Requirements
 Install the necessary Python libraries, including peft for LoRA:
-
+```bash
 pip install -r requirements.txt
-
+```
 d. Install Project Package
 Install the project code itself in editable mode (allows changes to take effect without reinstalling):
 
+```bash
 pip install -e .
-
+```
 e. Hugging Face Authentication (Required for Gemma)
 Log in to access gated models:
 
+```bash
 huggingface-cli login
-
+```
 Alternatively, set HF_TOKEN environment variable or add token to config.yaml.
 
 f. Weights & Biases Authentication (Optional)
 Log in to enable experiment tracking:
 
+```bash
 wandb login
-
+```
 g. Hardware Requirements
 
 Full Fine-tuning: Requires substantial GPU VRAM (e.g., >= 80GB for Gemma 9B).
@@ -85,16 +89,18 @@ The sft_script.py handles training and evaluation for both Full SFT and LoRA SFT
 a. Configure Accelerate (One-time Setup)
 If you haven't configured accelerate for your machine before, run the following command and answer the questions about your setup (e.g., number of GPUs, mixed precision):
 
+```bash
 accelerate config
-
+```
 This saves your configuration for future use.
 
 b. Launch the Training Script
 Use accelerate launch to run the script:
 
 # Ensure you are in the project root directory
+```bash
 accelerate launch src/sft_project/sft_script.py --config config.yaml
-
+```
 The script will automatically apply LoRA if tuning_method: lora is set in the config.
 
 It evaluates the base model first, then trains (either fully or just adapters), then evaluates the fine-tuned result.
@@ -123,6 +129,7 @@ b. Run the Inference Script
 
 Example: Inference with a fully fine-tuned model:
 
+```bash
 python src/sft_project/inference.py \
     --model_name_or_path ./sft_results/final_checkpoint_full/ \
     --input_file input_prompts.jsonl \
@@ -131,9 +138,9 @@ python src/sft_project/inference.py \
     --max_new_tokens 256 \
     --temperature 0.1 \
     # Other args...
-
+```
 Example: Inference with a LoRA fine-tuned model:
-
+```bash
 python src/sft_project/inference.py \
     --model_name_or_path google/gemma-2-9b-it \ # Provide BASE model name/path
     --adapter_path ./sft_results/final_checkpoint_lora/ \ # Provide path to LoRA adapters
@@ -143,7 +150,7 @@ python src/sft_project/inference.py \
     --max_new_tokens 256 \
     --temperature 0.1 \
     # Other args...
-
+```
 Key Inference Arguments:
 
 --model_name_or_path: (Required) Path/name of the base model (for LoRA) or the full SFT checkpoint path (for full SFT).
