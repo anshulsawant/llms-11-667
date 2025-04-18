@@ -64,7 +64,7 @@ g. Hardware Requirements
 
   LoRA Fine-tuning: Significantly reduces VRAM requirements, making it feasible on GPUs with less memory (e.g., 24GB or 40GB might be sufficient, depending on config). Adjust batch sizes accordingly.
 
-2. Configuration (config.yaml)
+## 2. Configuration (config.yaml)
   The config.yaml file controls the fine-tuning process:
 
   tuning_method: Set to "full" or "lora" to select the fine-tuning approach.
@@ -83,7 +83,7 @@ g. Hardware Requirements
 
   Review and modify this file to select your tuning method and set appropriate parameters.
 
-3. Running Training and Evaluation
+## 3. Running Training and Evaluation
   The sft_script.py handles training and evaluation for both Full SFT and LoRA SFT, based on the tuning_method set in config.yaml.
 
 a. Configure Accelerate (One-time Setup)
@@ -105,7 +105,7 @@ The script will automatically apply LoRA if tuning_method: lora is set in the co
 
 It evaluates the base model first, then trains (either fully or just adapters), then evaluates the fine-tuned result.
 
-4. Finding Training Results
+## 4. Finding Training Results
   Logs: Console output and WandB dashboard provide detailed metrics.
 
 Checkpoints & Final Model/Adapter: Saved in training.output_dir (inside subdirectories like final_checkpoint_full or final_checkpoint_lora).
@@ -116,7 +116,7 @@ LoRA SFT: Saves only the trained adapter weights and configuration (adapter_mode
 
 Metrics: Saved in training.output_dir and logged to WandB.
 
-5. Running Inference with Models
+## 5. Running Inference with Models
   Use the inference.py script, which now supports loading both full models and LoRA adapters.
 
 a. Prepare Input File
