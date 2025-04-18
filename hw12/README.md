@@ -97,7 +97,7 @@ This saves your configuration for future use.
 b. Launch the Training Script
   Use accelerate launch to run the script:
 
-# Ensure you are in the project root directory
+  Ensure you are in the project root directory
 ```bash
 accelerate launch src/sft_project/sft_script.py --config config.yaml
 ```
