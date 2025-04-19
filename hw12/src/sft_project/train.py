@@ -185,9 +185,6 @@ def train(cfg: DictConfig):
     # --- Configure LoRA (if applicable) ---
     if cfg.tuning_method == "lora":
         logger.info("Configuring LoRA...")
-        if "bnb" in cfg.training.get("optim", ""):
-             logger.info("Preparing model for k-bit training.")
-             model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=cfg.training.gradient_checkpointing)
         lora_cfg_dict = cfg.get("lora_config")
         if not lora_cfg_dict: logger.error("LoRA specified but `lora_config:` missing."); sys.exit(1)
         lora_config_args = OmegaConf.to_container(lora_cfg_dict, resolve=True)
