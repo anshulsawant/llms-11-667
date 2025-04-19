@@ -84,13 +84,13 @@ def load_and_prepare_train_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Da
 def train(cfg: DictConfig):
     """Main training function."""
     set_seed(cfg.training.seed)
-    is_wandb_initialized = init_wandb(cfg, job_type="train") # Pass job type
 
     # Accelerator setup (optional here, Trainer uses it internally, but good practice)
     # fsdp_plugin = None
     # if Accelerator().distributed_type == DistributedType.FSDP: fsdp_plugin = FullyShardedDataParallelPlugin(...)
     # accelerator = Accelerator(fsdp_plugin=fsdp_plugin)
     accelerator = Accelerator() # Basic init for is_main_process checks etc.
+    is_wandb_initialized = init_wandb(cfg, accelerator) # Pass job type
     logger.info(f"Accelerator initialized: {accelerator.device}, Num Processes: {accelerator.num_processes}, Type: {accelerator.distributed_type}")
 
 
