@@ -1,7 +1,5 @@
 # Project Report: Fine-Tuning Gemma 2B IT for GSM8K Mathematical Reasoning
 
-**(Based on 11-967 HW12 Instructions)**
-
 ## Problem 1: Selecting a Task and Dataset
 
 ### A. Task Description and Motivation
