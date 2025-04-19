@@ -1,4 +1,3 @@
-# src/sft_project/evaluate.py
 """Script for evaluating base or fine-tuned models based on config."""
 
 import os
@@ -9,7 +8,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-import sys # <-- Added import sys
+import sys
 
 import torch
 import transformers
@@ -28,7 +27,7 @@ from tqdm.auto import tqdm
 from .utils import (
     load_config,
     # init_wandb, # Optional: Maybe log eval results separately?
-    load_model_and_tokenizer,
+    load_model_and_tokenizer, # Now expects only cfg
     format_prompt,
     extract_gsm8k_answer
 )
@@ -44,23 +43,19 @@ def parse_arguments():
     parser.add_argument("--config_path", type=str, required=True, help="Path to the override configuration YAML file defining the model and eval settings.")
     parser.add_argument("--base_config_path", type=str, default="config.yaml", help="Path to the base configuration YAML file.")
     parser.add_argument("--use_base_model", action="store_true", help="Force evaluation using the base model specified in the config, ignoring checkpoints.")
-    parser.add_argument("--eval_split", type=str, default=None, help="Override the evaluation split name (e.g., 'test', 'validation'). Defaults to config.")
-    parser.add_argument("--dataset_config_name", type=str, default=None, help="Override the dataset config name (e.g., 'main', 'socratic'). Defaults to config.")
-    parser.add_argument("--num_eval_samples", type=int, default=None, help="Override number of evaluation samples. Defaults to config.")
-    parser.add_argument("--eval_random_subset", action=argparse.BooleanOptionalAction, default=None, help="Override random subset sampling for eval. Defaults to config.")
+    # Removed superfluous arguments: --eval_split, --dataset_config_name, --num_eval_samples, --eval_random_subset
     parser.add_argument("--output_file", type=Path, default=None, help="Optional path to save evaluation metrics as JSON.")
-    # Add other potential overrides if needed (e.g., generation params)
     return parser.parse_args()
 
 
-def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer, args: argparse.Namespace) -> Dataset:
-    """Loads and prepares the evaluation dataset subset."""
-    # Get dataset parameters, allowing CLI override
+def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dataset:
+    """Loads and prepares the evaluation dataset subset based *only* on config."""
+    # Get dataset parameters directly from config
     dataset_name = cfg.dataset.name
-    dataset_config = args.dataset_config_name if args.dataset_config_name is not None else cfg.dataset.config_name
-    eval_split = args.eval_split if args.eval_split is not None else cfg.dataset.eval_split
-    num_samples = args.num_eval_samples if args.num_eval_samples is not None else cfg.dataset.get("num_eval_samples", None)
-    random_subset = args.eval_random_subset if args.eval_random_subset is not None else cfg.dataset.get("eval_random_subset", False)
+    dataset_config = cfg.dataset.config_name
+    eval_split = cfg.dataset.eval_split
+    num_samples = cfg.dataset.get("num_eval_samples", None)
+    random_subset = cfg.dataset.get("eval_random_subset", False)
     seed = cfg.training.seed # Use training seed for reproducibility
 
     logger.info(f"Loading evaluation dataset: {dataset_name} ({dataset_config}), split: {eval_split}")
@@ -78,7 +73,7 @@ def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer, args: 
         remove_columns=list(full_eval_dataset_raw.column_names)
     )
 
-    # Select subset if specified
+    # Select subset if specified in config
     selected_eval_dataset = formatted_eval_dataset
     if num_samples is not None and num_samples > 0:
         actual_num_samples = min(num_samples, len(formatted_eval_dataset))
@@ -201,67 +196,90 @@ def main():
         logger.info(f"Successfully loaded config from: {args.config_path} (overriding {args.base_config_path})")
     except Exception as e: logger.error(f"Failed to load configuration: {e}", exc_info=True); sys.exit(1)
 
-    # Determine Model and Adapter Paths
-    model_load_path: str; adapter_load_path: Optional[str] = None
-    is_base_model = args.use_base_model # Check flag
-
-    if is_base_model:
-        model_load_path = cfg.model.name
-        adapter_load_path = None
-        logger.info(f"Evaluating BASE model specified in config: '{model_load_path}'")
-    else:
-        # Infer paths from training output defined in the config
-        tuning_method = cfg.get("tuning_method", "full")
-        output_dir_from_config = Path(cfg.training.output_dir)
-        expected_checkpoint_dir = output_dir_from_config / "final_checkpoint"
-        logger.info(f"Attempting to load fine-tuned model (method: {tuning_method}) from checkpoint dir related to: {cfg.training.output_dir}")
-
-        if tuning_method == "lora":
-            model_load_path = cfg.model.name # Base model path
-            adapter_load_path = str(expected_checkpoint_dir) # Adapter path
-            logger.info(f"Loading LoRA setup: Base='{model_load_path}', Adapter='{adapter_load_path}'")
-            if not os.path.isdir(adapter_load_path): logger.warning(f"LoRA adapter path does not exist: {adapter_load_path}")
-        elif tuning_method == "full":
-            model_load_path = str(expected_checkpoint_dir) # Full SFT checkpoint path
-            adapter_load_path = None
-            logger.info(f"Loading Full SFT setup: Model='{model_load_path}'")
-            if not os.path.isdir(model_load_path): logger.error(f"Full SFT checkpoint path does not exist: {model_load_path}"); sys.exit(1)
-        else: logger.error(f"Unknown tuning_method '{tuning_method}'."); sys.exit(1)
-
-    # Get other parameters from config
-    precision = cfg.inference.get("precision", "bf16") if cfg.get("inference") else cfg.training.get("bf16") and "bf16" or "fp32" # Fallback to training precision
-    hf_token = cfg.model.get("access_token", None)
-    trust_remote_code = cfg.model.get("trust_remote_code", False)
-
     # Initialize Accelerator
     accelerator = Accelerator()
 
-    # Load Model and Tokenizer
+    # Load base model and tokenizer using the utility function
     try:
-        # NOTE: The traceback indicated a TypeError here:
-        # "load_model_and_tokenizer() takes 1 positional argument but 5 were given"
-        # Ensure the function definition in 'src/sft_project/utils.py' matches these arguments:
-        # (model_path, precision, token, trust_remote_code, adapter_path)
-        model, tokenizer = load_model_and_tokenizer(
-            model_load_path, precision, hf_token, trust_remote_code, adapter_load_path
-        )
-    except Exception as e: # Catching generic Exception to handle the TypeError or other loading issues
-        # Log the specific exception for debugging
-        logger.error(f"Exiting due to model loading failure: {e}", exc_info=True)
-        sys.exit(1) # sys is now imported
+        logger.info("Loading base model and tokenizer using config...")
+        # --- Call changed to only use cfg ---
+        model, tokenizer = load_model_and_tokenizer(cfg)
+        logger.info("Base model and tokenizer loaded.")
+    except Exception as e:
+        logger.error(f"Exiting due to base model/tokenizer loading failure: {e}", exc_info=True)
+        sys.exit(1)
+
+    # --- Logic to load adapter or full checkpoint AFTER base model is loaded ---
+    is_base_model_eval = args.use_base_model # Check flag
+
+    if not is_base_model_eval:
+        tuning_method = cfg.get("tuning_method", "full")
+        output_dir_from_config = Path(cfg.training.output_dir)
+        expected_checkpoint_dir = output_dir_from_config / "final_checkpoint"
+        logger.info(f"Attempting to load fine-tuned model (method: {tuning_method}) from checkpoint dir: {expected_checkpoint_dir}")
+
+        try:
+            if tuning_method == "lora":
+                adapter_load_path = str(expected_checkpoint_dir)
+                logger.info(f"Loading LoRA adapter from: '{adapter_load_path}'")
+                if not os.path.isdir(adapter_load_path):
+                    logger.error(f"LoRA adapter path does not exist: {adapter_load_path}")
+                    sys.exit(1)
+                # Load the PEFT adapter onto the base model
+                model = PeftModel.from_pretrained(model, adapter_load_path)
+                logger.info("LoRA adapter loaded successfully.")
+
+            elif tuning_method == "full":
+                checkpoint_path = str(expected_checkpoint_dir)
+                logger.info(f"Loading Full SFT checkpoint from: '{checkpoint_path}'")
+                if not os.path.isdir(checkpoint_path):
+                    logger.error(f"Full SFT checkpoint path does not exist: {checkpoint_path}")
+                    sys.exit(1)
+
+                # Need to reload the model entirely from the checkpoint
+                # Reconstruct model kwargs from config (similar to utils.py)
+                access_token = cfg.model.get("access_token", None)
+                trust_remote_code = cfg.model.get("trust_remote_code", False)
+                model_kwargs = {"trust_remote_code": trust_remote_code, "token": access_token}
+                attn_impl = cfg.model.get("attn_implementation", None)
+                if attn_impl: model_kwargs["attn_implementation"] = attn_impl
+                precision = "bf16" if cfg.training.get("bf16") else "fp16" if cfg.training.get("fp16") else "fp32"
+                if precision == "bf16": model_kwargs["torch_dtype"] = torch.bfloat16
+                elif precision == "fp16": model_kwargs["torch_dtype"] = torch.float16
+
+                # Replace the previously loaded base model
+                del model # Release memory if possible
+                torch.cuda.empty_cache() # Try to clear cache
+                model = AutoModelForCausalLM.from_pretrained(checkpoint_path, **model_kwargs)
+                logger.info("Full SFT model loaded successfully from checkpoint.")
+                # Tokenizer should remain the same as the base model's
+
+            else:
+                logger.error(f"Unknown tuning_method '{tuning_method}'. Cannot load fine-tuned model."); sys.exit(1)
+
+        except Exception as e:
+            logger.error(f"Failed to load fine-tuned model/adapter (method: {tuning_method}): {e}", exc_info=True)
+            sys.exit(1)
+    else:
+        logger.info(f"Evaluating BASE model specified in config: '{cfg.model.name}'")
+
 
     # Load Evaluation Data
     try:
-        eval_dataset = load_and_prepare_eval_data(cfg, tokenizer, args)
-    except Exception as e: logger.error(f"Exiting due to eval data loading failure: {e}", exc_info=True); sys.exit(1) # Added exc_info=True for better debugging
+        # Pass tokenizer loaded either from base or potentially reloaded for full SFT (though usually same)
+        eval_dataset = load_and_prepare_eval_data(cfg, tokenizer)
+    except Exception as e: logger.error(f"Exiting due to eval data loading failure: {e}", exc_info=True); sys.exit(1)
 
     # Prepare model with accelerator
+    # This needs to happen AFTER potential adapter/checkpoint loading
+    logger.info("Preparing model with Accelerator...")
     model = accelerator.prepare(model)
+    logger.info("Model prepared.")
 
     # Run evaluation
     logger.info("Starting evaluation...")
     eval_metrics = evaluate_gsm8k(
-        model, tokenizer, eval_dataset, cfg, accelerator, is_base_model_eval=is_base_model
+        model, tokenizer, eval_dataset, cfg, accelerator, is_base_model_eval=is_base_model_eval
     )
 
     # Save results if output file specified
