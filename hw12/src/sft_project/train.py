@@ -192,6 +192,7 @@ def train(cfg: DictConfig):
             try: lora_config_args["task_type"] = TaskType[lora_config_args["task_type"]]
             except KeyError: logger.error(f"Invalid LoRA task_type: {lora_config_args['task_type']}."); sys.exit(1)
         peft_config = LoraConfig(**lora_config_args)
+        print(model)
         model = get_peft_model(model, peft_config)
         logger.info("LoRA configured successfully.")
         model.print_trainable_parameters()
@@ -204,9 +205,30 @@ def train(cfg: DictConfig):
     report_to_val = training_args_dict.get("report_to", [])
     if not isinstance(report_to_val, list): report_to_val = [report_to_val] if report_to_val else []
     if "wandb" not in report_to_val and wandb_run is not None: logger.warning("WandB init but not in report_to.")
-    if "wandb" in report_to_val and wandb_run is None: logger.warning("WandB requested but failed init."); report_to_val = [r for r in report_to_val if r != "wandb"]
+    if "wandb" in report_to_val and wandb_run is None: logger.warning("WandB requested but failed init.");
+    report_to_val = [r for r in report_to_val if r != "wandb"]
     if not report_to_val: report_to_val = "none"
     training_args_dict["report_to"] = report_to_val
+
+    # Ensure gradient_checkpointing argument exists
+    gc_flag = cfg.training.get("gradient_checkpointing", False) # Default False if missing
+    training_args_dict['gradient_checkpointing'] = gc_flag
+    logger.info(f"Setting gradient_checkpointing in TrainingArguments: {gc_flag}")
+
+    # --- FIX: Add gradient_checkpointing_kwargs if gradient_checkpointing is enabled ---
+    if gc_flag:
+        # Check if kwargs are already defined in config, otherwise use default
+        gc_kwargs = cfg.training.get("gradient_checkpointing_kwargs", {"use_reentrant": False})
+        # Ensure it's a dictionary (convert if needed from OmegaConf)
+        if isinstance(gc_kwargs, DictConfig):
+            gc_kwargs = OmegaConf.to_container(gc_kwargs, resolve=True)
+        # Set the argument for TrainingArguments
+        training_args_dict['gradient_checkpointing_kwargs'] = gc_kwargs
+        logger.info(f"Setting gradient_checkpointing_kwargs: {gc_kwargs}")
+    elif 'gradient_checkpointing_kwargs' in training_args_dict:
+         # Remove if GC is false but kwargs somehow exist in dict
+         del training_args_dict['gradient_checkpointing_kwargs']
+    # --- End FIX ---
 
     training_args = TrainingArguments(**training_args_dict, remove_unused_columns=False) # Keep remove_unused_columns=False
     logger.info(f"TrainingArguments defined. Output dir: {training_args.output_dir}")
@@ -253,6 +275,24 @@ def train(cfg: DictConfig):
             trainer.save_metrics("train", metrics)
             trainer.save_state() # Save optimizer, scheduler, RNG states
             logger.info(f"Training metrics and state saved.")
+            # --- FIX: Explicitly log final metrics to WandB for summary ---
+            if wandb_run and wandb: # Check if wandb run exists and library is imported
+                 logger.info("Explicitly logging final metrics to WandB summary...")
+                 # Prepare metrics dict for wandb (sometimes requires flattening)
+                 wandb_metrics = {}
+                 for k, v in metrics.items():
+                     # Ensure key is wandb-compatible and value is numerical
+                     if isinstance(v, (int, float)):
+                         wandb_metrics[f"train/{k}"] = v # Add prefix for clarity
+                     else:
+                          logger.debug(f"Skipping non-numerical metric for wandb summary: {k}={v}")
+                 if wandb_metrics:
+                      wandb.log(wandb_metrics) # Use wandb.log directly
+                      logger.info("Explicit WandB metric logging complete.")
+                 else:
+                      logger.warning("No numerical metrics found in train_result to log explicitly to WandB.")
+            # --- End FIX ---
+
     except Exception as e:
         logger.error(f"An error occurred during training: {e}", exc_info=True)
         if wandb_run: wandb_run.finish(exit_code=1) # Mark WandB run as failed
@@ -269,6 +309,10 @@ def main():
     args = parse_arguments()
     try:
         config = load_config(override_config_path=args.config_path, base_config_path=args.base_config_path)
+        logger.info("--- Final Configuration Used ---")
+        # Use OmegaConf.to_yaml to get a readable string representation
+        logger.info(f"\n{OmegaConf.to_yaml(config)}")
+        logger.info("------------------------------")
         train(config)
     except Exception as e:
         logger.error(f"An error occurred in the main execution flow: {e}", exc_info=True)
