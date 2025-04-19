@@ -64,7 +64,7 @@ evaluation: # Settings used by evaluate_gsm8k in sft_script.py
   max_new_tokens: 256
   temperature: 0.1
   do_sample: true
-  base_model_prompt_strategy: "one_shot"
+  base_model_prompt_strategy: "zero_shot"
   one_shot_example:
     question: "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
     answer: "Natalia sold 48 clips in April.\nIn May, she sold half as many clips as in April, so she sold 48 / 2 = 24 clips.\nAltogether, Natalia sold 48 + 24 = 72 clips.\n#### 72"
