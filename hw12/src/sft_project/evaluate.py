@@ -9,6 +9,7 @@ import argparse
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+import sys # <-- Added import sys
 
 import torch
 import transformers
@@ -237,15 +238,22 @@ def main():
 
     # Load Model and Tokenizer
     try:
+        # NOTE: The traceback indicated a TypeError here:
+        # "load_model_and_tokenizer() takes 1 positional argument but 5 were given"
+        # Ensure the function definition in 'src/sft_project/utils.py' matches these arguments:
+        # (model_path, precision, token, trust_remote_code, adapter_path)
         model, tokenizer = load_model_and_tokenizer(
             model_load_path, precision, hf_token, trust_remote_code, adapter_load_path
         )
-    except Exception: logger.error("Exiting due to model loading failure."); sys.exit(1)
+    except Exception as e: # Catching generic Exception to handle the TypeError or other loading issues
+        # Log the specific exception for debugging
+        logger.error(f"Exiting due to model loading failure: {e}", exc_info=True)
+        sys.exit(1) # sys is now imported
 
     # Load Evaluation Data
     try:
         eval_dataset = load_and_prepare_eval_data(cfg, tokenizer, args)
-    except Exception as e: logger.error(f"Exiting due to eval data loading failure: {e}"); sys.exit(1)
+    except Exception as e: logger.error(f"Exiting due to eval data loading failure: {e}", exc_info=True); sys.exit(1) # Added exc_info=True for better debugging
 
     # Prepare model with accelerator
     model = accelerator.prepare(model)
