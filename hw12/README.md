@@ -53,21 +53,24 @@ pip install -e .
 
 **g. Hardware Requirements** (Full SFT needs high VRAM, LoRA is more efficient)
 
-## 2. Configuration (`config.yaml` + Overrides)
+## 2. Configuration
 
-Configuration is managed via YAML files using `OmegaConf` merging.
+Project behavior is controlled by YAML configuration files.
 
-* **`config.yaml`**: Contains the base configuration (default model, dataset, training parameters, LoRA settings, evaluation settings, **default inference settings**).
-* **Override Configs (e.g., `config_full_main.yaml`):** Smaller files specifying only the parameters that differ for a specific experiment run (like `tuning_method`, `dataset.config_name`, `training.output_dir`, `wandb.run_name`). These merge with `config.yaml`.
-* **`inference` Section:** The base `config.yaml` contains an `inference` section defining default parameters used by `inference.py`:
-    * `input_file`: Default path to the input data.
-    * `output_dir`: Default directory for saving inference results.
-    * `prompt_field`: Default field name for questions in the input file.
-    * `output_field`: Default field name for generations in the output file.
-    * `precision`, `batch_size`, `max_new_tokens`, `temperature`, `do_sample`: Default generation parameters.
-    * **Note:** These values in the `inference` section can also be overridden in your specific run config files (e.g., `config_full_main.yaml`) if needed for a particular model.
+* **`config.yaml`**: The base configuration file containing default settings for the model, dataset, training, evaluation, inference, LoRA, and WandB.
+* **Override Configs (`configs/*.yaml`):** Place experiment-specific configurations in the `configs/` directory (e.g., `configs/lora_main_config.yaml`). These files only need to contain parameters that differ from `config.yaml`. The scripts merge the override config onto the base config.
 
-Review `config.yaml` for base settings and create/modify override files for specific runs.
+**Key Configuration Sections:**
+
+* `model`: Base model name, access token, etc.
+* `dataset`: Dataset name, config name (e.g., 'main', 'socratic'), splits, sample counts, sequence length, prompt format.
+* `training`: Hyperparameters for the `Trainer` (epochs, batch size, learning rate, optimizer, output directory, logging steps, gradient checkpointing, etc.), `tuning_method` ('full' or 'lora'), `report_to`.
+* `lora_config`: Parameters for LoRA (r, alpha, target_modules, etc.), used only if `tuning_method: lora`.
+* `evaluation`: Parameters for evaluation runs (batch size, generation settings like `max_new_tokens`, `temperature`, base model prompting strategy/example).
+* `inference`: Parameters for inference runs (input file path, batch size, generation settings).
+* `wandb`: Project name, run name prefix/details for logging.
+
+**Before running any script, ensure you have an appropriate override config file created in the `configs/` directory.**
 
 ## 3. Running Training
 
@@ -82,13 +85,13 @@ accelerate config
 Provide the path to your specific **override** config file.
 ```bash
 # Example: Run Full SFT using settings in config_full_main.yaml
-accelerate launch src/sft_project/train.py --config config_full_main.yaml
+accelerate launch src/sft_project/train.py --config_path config_full_main.yaml
 
 # Example: Run LoRA SFT using settings in config_lora_main.yaml
-accelerate launch src/sft_project/train.py --config config_lora_main.yaml
+accelerate launch src/sft_project/train.py --config_path config_lora_main.yaml
 
 # Specify a different base config if needed:
-# accelerate launch src/sft_project/train.py --config <override.yaml> --base_config <base.yaml>
+# accelerate launch src/sft_project/train.py --config_path <override.yaml> --base_config <base.yaml>
 ```
 * Selects Full SFT or LoRA based on `tuning_method` in the *merged* config.
 * Evaluates base model (pre-training), trains, evaluates base model again (post-training). **Note: Evaluation of the fine-tuned model itself is now done separately using `evaluate.py`.**
@@ -110,35 +113,23 @@ accelerate launch src/sft_project/evaluate.py --config_path config_lora_main.yam
 
 # Example: Evaluate the Full SFT model trained using config_full_main.yaml
 accelerate launch src/sft_project/evaluate.py --config_path config_full_main.yaml
-
-# Example: Evaluate LoRA model on the 'socratic' split using 50 random samples
-accelerate launch src/sft_project/evaluate.py \
-    --config_path config_lora_main.yaml \
-    --dataset_config_name socratic \
-    --num_eval_samples 50 \
-    --eval_random_subset
-
-# Example: Save metrics to a file
-accelerate launch src/sft_project/evaluate.py \
-    --config_path config_lora_main.yaml \
-    --output_file ./results/lora_main_eval_metrics.json
-
 ```
-**Command-Line Arguments for `evaluate.py`:**
-* `--config_path`: (Required) Path to the override config file for the model/run.
-* `--base_config_path`: (Optional) Path to base config (default: `config.yaml`).
-* `--use_base_model`: (Optional) Flag to force evaluation of the base model.
-* `--eval_split`: (Optional) Override evaluation split name (default from config).
-* `--dataset_config_name`: (Optional) Override dataset config (e.g., "socratic", default from config).
-* `--num_eval_samples`: (Optional) Override number of samples (default from config).
-* `--eval_random_subset`: (Optional) Override random sampling flag (default from config).
-* `--output_file`: (Optional) Path to save metrics JSON.
+* Dataset parameters (`eval_split`, `num_eval_samples`, etc.) are taken directly from the `dataset:` section of the merged configuration.
 
-## 5. Finding Training & Evaluation Results
+* Evaluation metrics (JSON file) are saved automatically to the `./eval_results/` directory. The filename includes details from the config, model type, and dataset.
+* When evaluating the base model, zero or one-shot prompt with explicit instructions is used.
+**Key Command-Line Arguments:**
+
+* `--config_path`: (Required) Path to the override config file defining the model and evaluation settings.
+
+* `--base_config_path`: (Optional) Path to the base config file (default: `config.yaml`).
+
+* `--use_base_model`: (Optional) Add this flag to evaluate the base model specified in the config instead of loading a fine-tuned checkpoint/adapter.
+
+## 5. Finding Training Results
 
 * **Training Logs:** Console output and WandB dashboard (if enabled).
 * **Checkpoints & Final Model/Adapter:** Saved in the `training.output_dir` specified in the *merged* config used for training (e.g., `./sft_results_full_main/final_checkpoint/`). LoRA saves only adapter weights.
-* **Evaluation Metrics:** Printed to console by `evaluate.py`. Can optionally be saved to a JSON file using `--output_file`. Evaluation results from the pre/post base model checks in `train.py` are logged to console/WandB.
 
 ## 6. Running Inference with Models
 
@@ -166,6 +157,8 @@ python src/sft_project/inference.py --config_path config_full_main.yaml --use_ba
 * `--config_path`: (Required) Path to the override config file.
 * `--base_config_path`: (Optional) Path to base config (default: `config.yaml`).
 * `--use_base_model`: (Optional) Flag to force using the base model.
+
+If using the base model, zero or one shot prompt with explicit instruction is used.
 
 **c. Find Inference Results**
 Saved to a **new file** named `[input_file_stem]__[config_file_stem_OR_base_id]__generations.jsonl` in the directory specified by `inference.output_dir` in the config.
