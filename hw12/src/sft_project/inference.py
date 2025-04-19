@@ -139,8 +139,8 @@ def run_inference(
 
             if strategy == "one_shot":
                 # Get example from config (inference > evaluation > default=None)
-                one_shot_example = cfg.inference.get("few_shot_example",
-                                                     cfg.evaluation.get("few_shot_example", None))
+                one_shot_example = cfg.inference.get("one_shot_example",
+                                                     cfg.evaluation.get("one_shot_example", None))
                 if one_shot_example and isinstance(one_shot_example, DictConfig) and \
                    one_shot_example.get("question") and one_shot_example.get("answer"):
                     # Format the one-shot example (assuming question/answer keys like GSM8K)
@@ -150,7 +150,7 @@ def run_inference(
                     few_shot_text = f"Question: {q}\nAnswer: {a}\n\n" # Match GSM8K format
                     logger.info("Using one-shot example for base model.")
                 else:
-                    logger.warning("One-shot strategy requested for base model, but 'few_shot_example' is missing, invalid, or lacks 'question'/'answer' in config.")
+                    logger.warning("One-shot strategy requested for base model, but 'one_shot_example' is missing, invalid, or lacks 'question'/'answer' in config.")
             elif strategy != "zero_shot":
                  logger.warning(f"Unknown base_model_prompt_strategy '{strategy}'. Using zero-shot.")
 
