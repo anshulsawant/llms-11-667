@@ -75,16 +75,12 @@ def load_config(override_config_path: str, base_config_path: str = "config.yaml"
               if lr_kwargs is None or lr_kwargs.get("min_lr") is None: logger.warning("lr_kwargs.min_lr missing.")
               elif not isinstance(lr_kwargs.min_lr, (float, int)) or lr_kwargs.min_lr < 0.0: raise ValueError("Invalid min_lr.")
               elif lr_kwargs.min_lr >= merged_conf.training.learning_rate: logger.warning(f"min_lr >= learning_rate.")
-        # --- Rename evaluation_strategy key if present ---
         if "evaluation_strategy" in merged_conf.training and "eval_strategy" not in merged_conf.training:
-             logger.warning("Found 'evaluation_strategy' in config, renaming to 'eval_strategy' for TrainingArguments.")
+             logger.warning("Renaming 'evaluation_strategy' to 'eval_strategy'.")
              merged_conf.training.eval_strategy = merged_conf.training.evaluation_strategy
              del merged_conf.training.evaluation_strategy
-        # --- Remove eval_steps if eval_strategy is "no" ---
         if merged_conf.training.get("eval_strategy") == "no" and "eval_steps" in merged_conf.training:
-             logger.info("Removing 'eval_steps' as 'eval_strategy' is 'no'.")
-             del merged_conf.training.eval_steps
-
+             logger.info("Removing 'eval_steps'."); del merged_conf.training.eval_steps
         logger.info("Merged configuration validated.")
         # --- End validation ---
         return merged_conf
@@ -157,8 +153,9 @@ def load_and_prepare_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dict[str
     return {"train": final_train_dataset, "eval_for_trainer": final_trainer_eval_dataset, "raw_eval_for_generation": raw_eval_dataset_for_generation}
 
 # --- Model Loading ---
+# --- Updated load_model_and_tokenizer ---
 def load_model_and_tokenizer(cfg: DictConfig) -> (AutoModelForCausalLM, AutoTokenizer):
-    # (Implementation remains the same)
+    """Loads the base model and tokenizer based on the configuration."""
     logger.info(f"Loading base model: {cfg.model.name}")
     model_name = cfg.model.name; access_token = cfg.model.access_token; trust_remote_code = cfg.model.trust_remote_code
     model_kwargs = {"trust_remote_code": trust_remote_code, "token": access_token}
@@ -166,19 +163,34 @@ def load_model_and_tokenizer(cfg: DictConfig) -> (AutoModelForCausalLM, AutoToke
     elif cfg.training.fp16: logger.info("Using float16 precision."); model_kwargs["torch_dtype"] = torch.float16
     else: logger.info("Using default float32 precision.")
     model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+
     logger.info(f"Loading tokenizer for {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token=access_token, trust_remote_code=trust_remote_code, padding_side="right", use_fast=True)
+    # --- Set padding_side to 'left' ---
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=access_token,
+        trust_remote_code=trust_remote_code,
+        padding_side="left", # Use left padding
+        use_fast=True,
+    )
+    # --- End change ---
+
+    # Set pad token if missing - essential for left padding
     if tokenizer.pad_token is None:
-        logger.warning("Tokenizer setting pad_token=eos_token.")
+        logger.warning("Tokenizer does not have a pad token. Setting pad_token to eos_token.")
         tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = model.config.eos_token_id
+        # Important: Update model config pad_token_id as well
+        model.config.pad_token_id = tokenizer.pad_token_id
+
     logger.info("Base model and tokenizer loaded successfully.")
     return model, tokenizer
+# --- End updated load_model_and_tokenizer ---
+
 
 # --- Evaluation ---
 @torch.no_grad()
 def evaluate_gsm8k( model: AutoModelForCausalLM, tokenizer: AutoTokenizer, dataset: Any, cfg: DictConfig, accelerator: Accelerator, is_base_model_eval: bool = False) -> Dict[str, float]:
-    # (Implementation updated previously for tqdm - remains the same)
+    # (Implementation remains the same - uses tqdm and gather_for_metrics)
     eval_type = "Base Model" if is_base_model_eval else "Fine-Tuned Model"
     logger.info(f"--- Starting GSM8K evaluation for {eval_type} ---"); model.eval()
     if "prompt" not in dataset.column_names or "ground_truth_answer" not in dataset.column_names:
@@ -246,17 +258,7 @@ def evaluate_gsm8k( model: AutoModelForCausalLM, tokenizer: AutoTokenizer, datas
             elif pred_answer == true_answer: exact_match_count += 1
         accuracy = (exact_match_count / total_count) * 100 if total_count > 0 else 0
         logger.info(f"GSM8K Evaluation Results ({eval_type}): Exact Match = {accuracy:.2f}% ({exact_match_count}/{total_count})"); results = {"gsm8k_exact_match": accuracy}
-        # Log with specific prefix based on eval type
-        log_key = f"eval/{'base_model' if is_base_model_eval else 'sft_model'}_gsm8k_exact_match"
-        # Check if this is the post-training base eval to give it a unique key
-        # We need a way to signal this... modify the function slightly or check caller?
-        # Let's add another flag for simplicity, although it makes the signature longer.
-        # Alternative: Check a global state? Bad practice. Pass a prefix? Better.
-        # Let's stick to the flag for now as it's explicit.
-        # --> Re-evaluating: Adding another flag is clumsy. Let's log base model eval only once (before training)
-        # and the post-training base eval with a distinct key manually after the call.
-        if wandb.run:
-             wandb.log({log_key: accuracy}) # Log standard base/sft results here
+        if wandb.run: log_key = f"eval/{'base_model' if is_base_model_eval else 'sft_model'}_gsm8k_exact_match"; wandb.log({log_key: accuracy})
 
     accelerator.wait_for_everyone(); model.train(); return results
 
@@ -264,181 +266,68 @@ def evaluate_gsm8k( model: AutoModelForCausalLM, tokenizer: AutoTokenizer, datas
 # --- Training ---
 
 def train_model(cfg: DictConfig): # Takes the merged config
-    """Main function to orchestrate the SFT process."""
-
-    set_seed(cfg.training.seed)
-    is_wandb_initialized = init_wandb(cfg)
-
+    # (Implementation remains the same - uses standard Trainer init)
+    set_seed(cfg.training.seed); is_wandb_initialized = init_wandb(cfg)
     fsdp_plugin = None
-    if Accelerator().distributed_type == DistributedType.FSDP:
-        fsdp_plugin = FullyShardedDataParallelPlugin(state_dict_type="FULL_STATE_DICT")
+    if Accelerator().distributed_type == DistributedType.FSDP: fsdp_plugin = FullyShardedDataParallelPlugin(state_dict_type="FULL_STATE_DICT")
     accelerator = Accelerator(fsdp_plugin=fsdp_plugin)
-    logger.info(f"Accelerator initialized. Device: {accelerator.device}, Num Processes: {accelerator.num_processes}, Distributed Type: {accelerator.distributed_type}")
-
-    # Load base model and tokenizer
-    with accelerator.main_process_first():
-        # Store original model name for later reloading
-        original_model_name = cfg.model.name
-        model, tokenizer = load_model_and_tokenizer(cfg)
-
-    # Load Data
-    with accelerator.main_process_first():
-        datasets = load_and_prepare_data(cfg, tokenizer)
-    train_dataset = datasets["train"]
-    trainer_eval_dataset = datasets["eval_for_trainer"] # Used only if eval_strategy != "no"
-    raw_eval_dataset_for_generation = datasets["raw_eval_for_generation"]
-
-    # --- Evaluate Base Model (BEFORE Training) ---
+    logger.info(f"Accelerator initialized: {accelerator.device}, Num Processes: {accelerator.num_processes}, Type: {accelerator.distributed_type}")
+    with accelerator.main_process_first(): original_model_name = cfg.model.name; model, tokenizer = load_model_and_tokenizer(cfg)
+    with accelerator.main_process_first(): datasets = load_and_prepare_data(cfg, tokenizer)
+    train_dataset = datasets["train"]; trainer_eval_dataset = datasets["eval_for_trainer"]; raw_eval_dataset_for_generation = datasets["raw_eval_for_generation"]
     logger.info("--- Evaluating Base Model (Before Any Training/Adapters) ---")
-    model_for_eval = model
-    eval_model_base = accelerator.prepare(model_for_eval)
-    base_model_metrics = evaluate_gsm8k(
-        eval_model_base, tokenizer, raw_eval_dataset_for_generation, cfg, accelerator, is_base_model_eval=True
-    )
-    # Base model metrics are logged inside evaluate_gsm8k with "eval/base_model_" prefix
-    del eval_model_base
-    accelerator.wait_for_everyone()
-    torch.cuda.empty_cache()
-    # --- End Base Model Evaluation ---
-
-    # --- Apply PEFT if configured ---
-    tuning_method = cfg.get("tuning_method", "full")
-    logger.info(f"Selected tuning method: {tuning_method}")
+    model_for_eval = model; eval_model_base = accelerator.prepare(model_for_eval)
+    base_model_metrics = evaluate_gsm8k(eval_model_base, tokenizer, raw_eval_dataset_for_generation, cfg, accelerator, is_base_model_eval=True)
+    del eval_model_base; accelerator.wait_for_everyone(); torch.cuda.empty_cache()
+    tuning_method = cfg.get("tuning_method", "full"); logger.info(f"Selected tuning method: {tuning_method}")
     if tuning_method == "lora":
          logger.info("Applying LoRA PEFT adapter...")
          target_modules_list = list(cfg.lora_config.target_modules) if isinstance(cfg.lora_config.target_modules, ListConfig) else cfg.lora_config.target_modules
-         peft_config = LoraConfig(
-             r=cfg.lora_config.r, lora_alpha=cfg.lora_config.lora_alpha,
-             target_modules=target_modules_list,
-             lora_dropout=cfg.lora_config.lora_dropout, bias=cfg.lora_config.bias,
-             task_type=getattr(TaskType, cfg.lora_config.task_type, TaskType.CAUSAL_LM)
-         )
-         model = get_peft_model(model, peft_config)
-         logger.info("LoRA adapter applied for training.")
-         model.print_trainable_parameters()
-    elif tuning_method != "full":
-        logger.error(f"Unknown tuning_method '{tuning_method}'. Exiting.")
-        return
-
-    # --- Set up Training Arguments ---
+         peft_config = LoraConfig(r=cfg.lora_config.r, lora_alpha=cfg.lora_config.lora_alpha, target_modules=target_modules_list, lora_dropout=cfg.lora_config.lora_dropout, bias=cfg.lora_config.bias, task_type=getattr(TaskType, cfg.lora_config.task_type, TaskType.CAUSAL_LM))
+         model = get_peft_model(model, peft_config); logger.info("LoRA adapter applied."); model.print_trainable_parameters()
+    elif tuning_method != "full": logger.error(f"Unknown tuning_method '{tuning_method}'."); return
     training_args_dict = OmegaConf.to_container(cfg.training, resolve=True)
-    if "evaluation_strategy" in training_args_dict and "eval_strategy" not in training_args_dict:
-        training_args_dict["eval_strategy"] = training_args_dict.pop("evaluation_strategy")
-        logger.info("Renamed config key 'evaluation_strategy' to 'eval_strategy'.")
-    # Ensure eval_steps is removed if eval_strategy is "no"
-    if training_args_dict.get("eval_strategy") == "no" and "eval_steps" in training_args_dict:
-         del training_args_dict["eval_steps"]
-    # Handle lr_scheduler_kwargs
+    if "evaluation_strategy" in training_args_dict and "eval_strategy" not in training_args_dict: training_args_dict["eval_strategy"] = training_args_dict.pop("evaluation_strategy"); logger.info("Renamed eval strategy key.")
+    if training_args_dict.get("eval_strategy") == "no" and "eval_steps" in training_args_dict: del training_args_dict["eval_steps"]
     if "lr_scheduler_kwargs" in training_args_dict and training_args_dict["lr_scheduler_kwargs"] is not None:
          if not isinstance(training_args_dict["lr_scheduler_kwargs"], dict):
              try: training_args_dict["lr_scheduler_kwargs"] = dict(training_args_dict["lr_scheduler_kwargs"])
-             except (TypeError, ValueError): logger.error("Could not convert lr_scheduler_kwargs."); del training_args_dict["lr_scheduler_kwargs"]
+             except (TypeError, ValueError): logger.error("Could not convert lr_kwargs."); del training_args_dict["lr_scheduler_kwargs"]
          if training_args_dict.get("lr_scheduler_type") == "cosine_with_min_lr":
-              if "min_lr" not in training_args_dict["lr_scheduler_kwargs"]: logger.warning("min_lr not found in lr_scheduler_kwargs.")
+              if "min_lr" not in training_args_dict["lr_scheduler_kwargs"]: logger.warning("min_lr not in lr_kwargs.")
     if "min_lr" in training_args_dict: del training_args_dict["min_lr"]
-
-    logger.info("Initializing Training Arguments...")
-    training_args = TrainingArguments(**training_args_dict)
-
-    # --- Initialize Trainer ---
-    logger.info("Initializing Trainer...")
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        # Pass eval dataset even if strategy is "no", Trainer might use it internally for something? Or set to None? Let's pass it.
-        eval_dataset=trainer_eval_dataset,
-        tokenizer=tokenizer,
-        data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
-    )
-
-    # --- Train ---
+    logger.info("Initializing Training Arguments..."); training_args = TrainingArguments(**training_args_dict)
+    logger.info("Initializing Trainer..."); trainer = Trainer(model=model, args=training_args, train_dataset=train_dataset, eval_dataset=trainer_eval_dataset, tokenizer=tokenizer, data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False))
     logger.info(f"--- Starting Fine-Tuning ({tuning_method}) ---")
     try:
         train_result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
-        logger.info("Training finished.")
-        metrics = train_result.metrics
-        # Log training metrics manually at the end if needed (since intermediate logging might be less frequent now)
+        logger.info("Training finished."); metrics = train_result.metrics
         if accelerator.is_main_process:
-             trainer.log_metrics("train", metrics) # Log final train metrics
-             trainer.save_metrics("train", metrics)
-             trainer.save_state()
-             if is_wandb_initialized and wandb.run:
-                  final_metrics = {"train/final_" + k: v for k,v in metrics.items()}
-                  wandb.log(final_metrics)
-
-            # --- Save Model/Adapter ---
-             logger.info("Saving final model/adapter...")
-             final_save_path = os.path.join(training_args.output_dir, f"final_checkpoint")
-             os.makedirs(final_save_path, exist_ok=True)
-             trainer.save_model(final_save_path) # Handles PEFT adapters automatically
-             tokenizer.save_pretrained(final_save_path)
+             trainer.log_metrics("train", metrics); trainer.save_metrics("train", metrics); trainer.save_state()
+             if is_wandb_initialized and wandb.run: final_metrics = {"train/final_" + k: v for k,v in metrics.items()}; wandb.log(final_metrics)
+             logger.info("Saving final model/adapter..."); final_save_path = os.path.join(training_args.output_dir, f"final_checkpoint")
+             os.makedirs(final_save_path, exist_ok=True); trainer.save_model(final_save_path); tokenizer.save_pretrained(final_save_path)
              try: OmegaConf.save(cfg, os.path.join(final_save_path, "training_config_merged.yaml"))
-             except Exception as e_save: logger.error(f"Failed to save merged training config: {e_save}")
+             except Exception as e_save: logger.error(f"Failed to save merged config: {e_save}")
              logger.info(f"Final model/adapter saved to {final_save_path}")
-             # --- End Saving ---
-
-    except Exception as e:
-        logger.error(f"An error occurred during training: {e}", exc_info=True)
-        if accelerator.is_main_process: logger.info("Attempting to save state due to error..."); trainer.save_state()
-        raise
-
-    # --- Evaluate Fine-Tuned Model (POST Training) ---
-    accelerator.wait_for_everyone()
-    logger.info(f"--- Evaluating Fine-Tuned Model ({tuning_method}) ---")
-    # Use the model state from the trainer after training
+    except Exception as e: logger.error(f"Training error: {e}", exc_info=True); if accelerator.is_main_process: logger.info("Saving state due to error..."); trainer.save_state(); raise
+    accelerator.wait_for_everyone(); logger.info(f"--- Evaluating Fine-Tuned Model ({tuning_method}) ---")
     eval_model_sft = accelerator.prepare(trainer.model)
-    sft_model_metrics = evaluate_gsm8k(
-        eval_model_sft, tokenizer, raw_eval_dataset_for_generation, cfg, accelerator, is_base_model_eval=False
-    )
-    # SFT model metrics are logged inside evaluate_gsm8k with "eval/sft_model_" prefix
-    del eval_model_sft # Clean up wrapped model
-    accelerator.wait_for_everyone()
-    torch.cuda.empty_cache()
-    # --- End SFT Model Evaluation ---
-
-
-    # --- Evaluate Base Model AGAIN (POST Training) ---
+    sft_model_metrics = evaluate_gsm8k(eval_model_sft, tokenizer, raw_eval_dataset_for_generation, cfg, accelerator, is_base_model_eval=False)
+    del eval_model_sft; accelerator.wait_for_everyone(); torch.cuda.empty_cache()
     logger.info("--- Evaluating Base Model AGAIN (Post-Training Comparison) ---")
-    # Reload the original base model to ensure it's untuned
-    # Use try-except for robustness
-    original_base_model = None # Define outside try
-    eval_original_base_model = None
+    original_base_model = None; eval_original_base_model = None
     try:
-        with accelerator.main_process_first():
-             # Reload base using original config details stored earlier
-             logger.info(f"Reloading original base model: {original_model_name}")
-             original_base_model, _ = load_model_and_tokenizer(cfg) # Reload base
-
-        # Prepare the reloaded base model for evaluation
+        with accelerator.main_process_first(): logger.info(f"Reloading original base model: {original_model_name}"); original_base_model, _ = load_model_and_tokenizer(cfg)
         eval_original_base_model = accelerator.prepare(original_base_model)
-
-        # Evaluate using the same function, marking it as base model eval
-        post_train_base_metrics = evaluate_gsm8k(
-            eval_original_base_model, tokenizer, raw_eval_dataset_for_generation, cfg, accelerator, is_base_model_eval=True # Mark as base eval
-        )
-        # Log manually with a distinct key
+        post_train_base_metrics = evaluate_gsm8k(eval_original_base_model, tokenizer, raw_eval_dataset_for_generation, cfg, accelerator, is_base_model_eval=True)
         if accelerator.is_main_process:
-             logger.info(f"Base Model Evaluation Metrics (Post-Training): {post_train_base_metrics}")
-             if is_wandb_initialized and wandb.run:
-                  wandb.log({"eval/post_train_base_model_gsm8k_exact_match": post_train_base_metrics.get("gsm8k_exact_match", 0)})
-
-    except Exception as e_reload:
-         logger.error(f"Failed to reload and evaluate original base model post-training: {e_reload}", exc_info=True)
-    finally:
-         # Clean up memory
-         del original_base_model, eval_original_base_model
-         accelerator.wait_for_everyone()
-         torch.cuda.empty_cache()
-    # --- End Post-Training Base Model Evaluation ---
-
-
-    # --- Clean Up WandB ---
-    if is_wandb_initialized and wandb.run and accelerator.is_main_process:
-        logger.info("Finishing WandB run..."); wandb.finish()
-
+             logger.info(f"Base Model Eval Metrics (Post-Training): {post_train_base_metrics}")
+             if is_wandb_initialized and wandb.run: wandb.log({"eval/post_train_base_model_gsm8k_exact_match": post_train_base_metrics.get("gsm8k_exact_match", 0)})
+    except Exception as e_reload: logger.error(f"Failed to reload/eval original base model post-training: {e_reload}", exc_info=True)
+    finally: del original_base_model, eval_original_base_model; accelerator.wait_for_everyone(); torch.cuda.empty_cache()
+    if is_wandb_initialized and wandb.run and accelerator.is_main_process: logger.info("Finishing WandB run..."); wandb.finish()
     logger.info("Script finished successfully.")
-
 
 # --- Main Execution ---
 if __name__ == "__main__":
