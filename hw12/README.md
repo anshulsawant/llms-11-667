@@ -1,6 +1,9 @@
 # Supervised Fine-Tuning (SFT) Project: Full vs. LoRA
 
-This project performs supervised fine-tuning (SFT) of a large language model using Hugging Face Transformers, Datasets, and Accelerate. It supports both **Full Parameter Fine-Tuning** and **Parameter-Efficient Fine-Tuning (PEFT)** via **LoRA (Low-Rank Adaptation)**. The initial configuration targets fine-tuning the `google/gemma-2-9b-it` model on the `gsm8k` dataset.
+This project performs supervised fine-tuning (SFT) of a large language model using Hugging Face Transformers, Datasets, and Accelerate. It supports both **Full Parameter Fine-Tuning** and **Parameter-Efficient Fine-Tuning (PEFT)** via **LoRA (Low-Rank Adaptation)**. The initial configuration targets fine-tuning the `google/gemma-2b-it` model on the `gsm8k` dataset.
+
+## Model Choice
+We initially started with `googel/gemma-2-9b-it`. However, the base model is too good for the task and it gave 86% performance with one shot prompt with explicit instructions. Therefore, we will try `google/gemma-2b-it`.
 
 ## Project Structure
 
@@ -33,8 +36,8 @@ cd llms-11-667/hw12
 ```
 **b. Create Virtual Environment**
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+python -m venv hw12
+source hw12/bin/activate  # On Windows use `hw12\Scripts\activate`
 ```
 **c. Install Requirements**
 ```bash
