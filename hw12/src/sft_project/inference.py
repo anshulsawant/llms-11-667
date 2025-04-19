@@ -1,4 +1,3 @@
-# src/sft_project/inference.py
 """Script for running inference with base or fine-tuned models."""
 
 import os
@@ -19,7 +18,7 @@ try:
     import transformers
     from accelerate import Accelerator
     from datasets import Dataset # Although not directly used, good for consistency
-    from omegaconf import OmegaConf, DictConfig
+    from omegaconf import OmegaConf, DictConfig, MissingMandatoryValue
     from transformers import (
         AutoModelForCausalLM,
         AutoTokenizer,
@@ -46,14 +45,11 @@ except ImportError as e:
 
 def parse_arguments():
     """Parses command-line arguments for inference."""
-    parser = argparse.ArgumentParser(description="Run inference with a base or fine-tuned model.")
+    parser = argparse.ArgumentParser(description="Run inference with a base or fine-tuned model using config.")
     parser.add_argument("--config_path", type=str, required=True, help="Path to the override configuration YAML file.")
     parser.add_argument("--base_config_path", type=str, default="config.yaml", help="Path to the base configuration YAML file.")
-    parser.add_argument("--input_file", type=Path, required=True, help="Path to the input JSON Lines file (each line is a JSON object).")
-    parser.add_argument("--output_file", type=Path, required=True, help="Path to save the output JSON Lines file with inference results.")
     parser.add_argument("--use_base_model", action="store_true", help="Force inference using the base model specified in the config, ignoring checkpoints.")
-    # Add other potential overrides if needed (e.g., specific generation params, batch size)
-    # parser.add_argument("--batch_size", type=int, default=None, help="Override inference batch size.")
+    # No --input_file or --output_file arguments needed
     return parser.parse_args()
 
 @torch.no_grad()
@@ -85,54 +81,40 @@ def run_inference(
     results = []
 
     # --- Get Generation Parameters ---
-    # Prioritize 'inference' config block, fallback to 'evaluation', then defaults
     gen_cfg = cfg.get("inference", cfg.get("evaluation", {})) # Use inference settings if available
     generation_kwargs = {
         "max_new_tokens": gen_cfg.get("max_new_tokens", 256),
         "pad_token_id": tokenizer.pad_token_id,
         "eos_token_id": tokenizer.eos_token_id,
         "temperature": gen_cfg.get("temperature", 0.1),
-        "do_sample": gen_cfg.get("do_sample", True) # Often True for creative tasks, maybe False for specific extraction
-        # Add other common params like top_p, top_k if needed from config
-        # "top_p": gen_cfg.get("top_p", 0.9),
-        # "top_k": gen_cfg.get("top_k", 50),
+        "do_sample": gen_cfg.get("do_sample", True)
     }
     if generation_kwargs["pad_token_id"] is None:
         generation_kwargs["pad_token_id"] = tokenizer.eos_token_id
         logger.warning(f"pad_token_id is None, setting to eos_token_id ({tokenizer.eos_token_id})")
     if generation_kwargs["eos_token_id"] is None:
         logger.error("eos_token_id is None. Generation might not stop correctly.")
-        # Consider setting a default or raising an error
 
     logger.info(f"Using generation parameters: {generation_kwargs}")
 
     # --- Prepare Prompts ---
-    # Assume format_prompt expects a dictionary and returns one with at least a "prompt" key
     try:
         formatted_prompts = [format_prompt(sample, cfg)["prompt"] for sample in input_data]
         logger.info(f"Formatted {len(formatted_prompts)} prompts.")
     except KeyError:
         logger.error("Failed to format prompts. Ensure `format_prompt` returns a dict with a 'prompt' key and input data has required fields.", exc_info=True)
-        return [] # Return empty results on formatting error
+        return []
     except Exception as e:
         logger.error(f"An unexpected error occurred during prompt formatting: {e}", exc_info=True)
         return []
 
-
-    # --- Batching (Simplified Example - No explicit batching, process one by one) ---
-    # For true batching, you'd use tokenizer with padding=True and process multiple prompts at once.
-    # This requires careful handling of padding and attention masks.
-    # accelerator.prepare() can handle DataLoader for distributed batching.
-    # Keeping it simple here for clarity, processing sequentially.
-
+    # --- Inference Loop ---
     progress_bar = tqdm(total=len(formatted_prompts), desc="Running Inference", disable=not accelerator.is_local_main_process)
 
     for i, prompt_text in enumerate(formatted_prompts):
         # --- Tokenization ---
-        # Calculate max input length dynamically based on model max length and max_new_tokens
-        # Add a buffer for safety
         buffer = 10
-        max_model_len = getattr(tokenizer, 'model_max_length', cfg.dataset.get('max_seq_length', 2048)) # Use tokenizer's max length if available
+        max_model_len = getattr(tokenizer, 'model_max_length', cfg.dataset.get('max_seq_length', 2048))
         max_input_length = max_model_len - generation_kwargs["max_new_tokens"] - buffer
 
         if max_input_length <= 0:
@@ -148,19 +130,15 @@ def run_inference(
         # --- Generation ---
         try:
             outputs = model.generate(**inputs, **generation_kwargs)
-            # Decode only the newly generated tokens
             completion_tokens = outputs[0][inputs['input_ids'].shape[1]:]
             completion = tokenizer.decode(completion_tokens, skip_special_tokens=True)
 
             # --- Store Result ---
-            output_sample = {**input_data[i], "completion": completion} # Merge original data with completion
-            # Optional: Add extracted answer if needed
-            # if cfg.dataset.name == "gsm8k": # Example check
-            #    output_sample["extracted_answer"] = extract_gsm8k_answer(completion)
+            output_sample = {**input_data[i], "completion": completion}
             results.append(output_sample)
 
         except Exception as e:
-            logger.error(f"Generation error for sample {i}: {e}", exc_info=False) # Set exc_info=True for full traceback
+            logger.error(f"Generation error for sample {i}: {e}", exc_info=False)
             output_sample = {**input_data[i], "completion": "[ERROR: Generation Failed]"}
             results.append(output_sample)
 
@@ -182,8 +160,7 @@ def main():
         cfg = load_config(override_config_path=args.config_path, base_config_path=args.base_config_path)
         logger.info(f"Successfully loaded config from: {args.config_path} (overriding {args.base_config_path})")
     except Exception as e:
-        logger.error(f"Failed to load configuration: {e}", exc_info=True)
-        sys.exit(1)
+        logger.error(f"Failed to load configuration: {e}", exc_info=True); sys.exit(1)
 
     # --- Initialize Accelerator ---
     accelerator = Accelerator()
@@ -194,11 +171,10 @@ def main():
         model, tokenizer = load_model_and_tokenizer(cfg)
         logger.info("Base model and tokenizer loaded.")
     except Exception as e:
-        logger.error(f"Exiting due to base model/tokenizer loading failure: {e}", exc_info=True)
-        sys.exit(1)
+        logger.error(f"Exiting due to base model/tokenizer loading failure: {e}", exc_info=True); sys.exit(1)
 
     # --- Load Fine-Tuned Model/Adapter if necessary ---
-    is_base_model_eval = args.use_base_model # Flag name kept for consistency
+    is_base_model_eval = args.use_base_model
 
     if not is_base_model_eval:
         tuning_method = cfg.get("tuning_method", "full")
@@ -221,7 +197,6 @@ def main():
                 if not os.path.isdir(checkpoint_path):
                     logger.error(f"Full SFT checkpoint path does not exist: {checkpoint_path}"); sys.exit(1)
 
-                # Reconstruct model kwargs from config
                 access_token = cfg.model.get("access_token", None)
                 trust_remote_code = cfg.model.get("trust_remote_code", False)
                 model_kwargs = {"trust_remote_code": trust_remote_code, "token": access_token}
@@ -231,8 +206,7 @@ def main():
                 if precision == "bf16": model_kwargs["torch_dtype"] = torch.bfloat16
                 elif precision == "fp16": model_kwargs["torch_dtype"] = torch.float16
 
-                del model # Release memory
-                torch.cuda.empty_cache()
+                del model; torch.cuda.empty_cache()
                 model = AutoModelForCausalLM.from_pretrained(checkpoint_path, **model_kwargs)
                 logger.info("Full SFT model loaded successfully from checkpoint.")
 
@@ -240,22 +214,43 @@ def main():
                 logger.error(f"Unknown tuning_method '{tuning_method}'."); sys.exit(1)
 
         except Exception as e:
-            logger.error(f"Failed to load fine-tuned model/adapter (method: {tuning_method}): {e}", exc_info=True)
-            sys.exit(1)
+            logger.error(f"Failed to load fine-tuned model/adapter (method: {tuning_method}): {e}", exc_info=True); sys.exit(1)
     else:
         logger.info(f"Running inference with BASE model specified in config: '{cfg.model.name}'")
 
-    # --- Load Input Data ---
-    logger.info(f"Loading input data from: {args.input_file}")
-    if not args.input_file.exists():
-        logger.error(f"Input file not found: {args.input_file}"); sys.exit(1)
+    # --- Load Input Data from Config ---
     try:
-        input_data = read_jsonl(str(args.input_file))
+        input_file_path_str = cfg.inference.input_file
+        input_file_path = Path(input_file_path_str)
+        logger.info(f"Loading input data from config path: {input_file_path}")
+    except MissingMandatoryValue:
+        logger.error("Missing 'inference.input_file' in configuration!"); sys.exit(1)
+    except Exception as e:
+         logger.error(f"Error accessing input file path from config: {e}"); sys.exit(1)
+
+    if not input_file_path.exists():
+        logger.error(f"Input file specified in config not found: {input_file_path}"); sys.exit(1)
+    try:
+        input_data = read_jsonl(str(input_file_path))
         if not input_data:
-             logger.warning(f"Input file {args.input_file} is empty or could not be read."); sys.exit(0) # Exit gracefully if no data
+             logger.warning(f"Input file {input_file_path} is empty or could not be read."); sys.exit(0)
         logger.info(f"Loaded {len(input_data)} samples from input file.")
     except Exception as e:
-        logger.error(f"Failed to read input file {args.input_file}: {e}", exc_info=True); sys.exit(1)
+        logger.error(f"Failed to read input file {input_file_path}: {e}", exc_info=True); sys.exit(1)
+
+    # --- Construct Output File Path ---
+    try:
+        config_path = Path(args.config_path)
+        config_stem = config_path.stem
+        data_stem = input_file_path.stem
+        # Place output file in the same directory as the input data file
+        output_filename = f"{config_stem}_{data_stem}_results.jsonl"
+        output_file_path = input_file_path.parent / output_filename
+        logger.info(f"Output will be saved to: {output_file_path}")
+    except Exception as e:
+        logger.error(f"Failed to construct output file path: {e}", exc_info=True)
+        # Decide if we should exit or proceed without saving
+        output_file_path = None # Set to None to prevent saving attempt later
 
 
     # --- Prepare Model with Accelerator ---
@@ -271,18 +266,22 @@ def main():
 
     # --- Save Results (only on main process) ---
     if accelerator.is_main_process:
-        if inference_results: # Check if there are results to save
-            logger.info(f"Saving inference results to: {args.output_file}")
+        if inference_results and output_file_path: # Check if results exist and path was constructed
+            logger.info(f"Saving inference results to: {output_file_path}")
             try:
-                args.output_file.parent.mkdir(parents=True, exist_ok=True)
-                write_jsonl(str(args.output_file), inference_results)
+                # write_jsonl handles directory creation now, but double-check if needed
+                # output_file_path.parent.mkdir(parents=True, exist_ok=True)
+                write_jsonl(str(output_file_path), inference_results)
                 logger.info("Results saved successfully.")
             except Exception as e:
-                logger.error(f"Failed to write results to {args.output_file}: {e}", exc_info=True)
-        else:
-            logger.warning("No inference results were generated or an error occurred. Output file will not be created.")
+                logger.error(f"Failed to write results to {output_file_path}: {e}", exc_info=True)
+        elif not inference_results:
+            logger.warning("Inference process completed, but no results were generated. Output file will not be created.")
+        else: # Results exist but output_file_path is None
+             logger.error("Output file path could not be constructed. Results were not saved.")
 
-    accelerator.wait_for_everyone() # Ensure all processes finish before exiting
+
+    accelerator.wait_for_everyone()
     logger.info("Inference script finished.")
 
 if __name__ == "__main__":
