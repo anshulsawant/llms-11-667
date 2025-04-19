@@ -75,7 +75,7 @@ evaluation: # Settings used by evaluate.py (and fallback for inference.py)
 # --- Updated inference section ---
 inference:
   # --- Add paths and fields here ---
-  input_file: "data/inference_input.jsonl" # Default input file path
+  input_file: "data/inference_input_one_shot.jsonl" # Default input file path
   output_dir: "./inference_outputs"      # Default output directory
   prompt_field: "question"                # Default input field name
   output_field: "generation"              # Default output field name
@@ -89,7 +89,4 @@ inference:
   base_model_instruction: "You are a helpful math assistant. Please provide a step-by-step derivation and end your answer with the final numerical result in the format '#### <number>'."
   # --- Also consider adding strategy/example here if needed for inference specifically ---
   base_model_prompt_strategy: "one_shot" # Example: maybe inference uses zero-shot
-  one_shot_example: # Example used if strategy is one_shot
-    question: "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
-    answer: "Natalia sold 48 clips in April.\nIn May, she sold half as many clips as in April, so she sold 48 / 2 = 24 clips.\nAltogether, Natalia sold 48 + 24 = 72 clips.\n#### 72"
 # --- End inference section ---
