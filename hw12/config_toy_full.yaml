@@ -28,8 +28,6 @@ training:
   warmup_ratio: 0.1
   logging_steps: 4
   save_steps: 8
-  evaluation_strategy: "steps"
-  eval_steps: 8
   save_total_limit: 1
   bf16: false
   fp16: false
