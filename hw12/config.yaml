@@ -3,13 +3,15 @@
 tuning_method: "full" # Options: "full", "lora"
 
 model:
-  name: "google/gemma-2-9b-it"
+  # --- Updated model name ---
+  name: "google/gemma-2b-it"
+  # --- End updated model name ---
   access_token: null
   trust_remote_code: true
 
 dataset:
   name: "gsm8k"
-  config_name: "main"
+  config_name: "main" # Used in output filename
   train_split: "train"
   eval_split: "test"
   num_train_samples: null
@@ -56,7 +58,7 @@ lora_config:
 
 wandb:
   project: "gemma-sft-gsm8k"
-  run_name: "gemma-2-9b-it-gsm8k-run-1"
+  run_name: "gemma-2-9b-it-gsm8k-run-1" # Consider updating this run name
   watch: "gradients"
   log_model: "checkpoint"
 
