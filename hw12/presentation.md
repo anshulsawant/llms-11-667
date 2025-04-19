@@ -2,12 +2,11 @@
 
 ---
 
-## Slide 1: Title Slide
+## Slide 1: Fine-Tuning Gemma 2B IT for GSM8K Math Reasoning
 
-* **Title:** Fine-Tuning Gemma 2B IT for GSM8K Math Reasoning
 * **Subtitle:** Comparing Full SFT vs. LoRA and Main vs. Socratic Datasets
-* **Presenter(s):** [Your Name(s)]
-* **Date:** [Date]
+* **Presenter(s):** Anshul Sawant
+* **Date:** 2025-04-23
 
 ---
 
@@ -31,12 +30,11 @@
 * **Base Model:** `google/gemma-2b-it`
 * **Fine-Tuning Approaches:**
     * **Full SFT:** Updated all model parameters.
-    * **LoRA:** Rank `r=16`, Alpha `alpha=32`. Targeted Modules: `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`. Approx. 30M trainable parameters (~1.2% of total).
+    * **LoRA:** Rank `r=16`, Alpha `alpha=32`. Targeted Modules: `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`. Approx. 20M trainable parameters (~0.8% of total).
 * **Datasets:** GSM8K (`main`, `socratic`) train splits used for respective runs.
 * **Training Setup:**
     * Frameworks: Hugging Face `transformers`, `peft`, `accelerate`.
-    * Key Hyperparameters: AdamW 8-bit optimizer, Cosine LR scheduler, BF16 precision, Effective Batch Size 8 (1 * 8), 1 Epoch. (Refer to config for details).
-    * Gradient Checkpointing used (`use_reentrant=False`).
+    * Key Hyperparameters: AdamW 8-bit optimizer, Cosine LR scheduler, BF16 precision, Effective Batch Size 16 (2 * 8), 1 Epoch. (Refer to config for details).
 * **Evaluation:** Exact Match Accuracy on GSM8K test split (100 samples).
 
 ---
