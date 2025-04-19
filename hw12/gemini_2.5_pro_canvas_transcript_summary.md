@@ -65,4 +65,46 @@
     * User requested updating the previously generated **toy config files** (`config_toy_full.yaml`, `config_toy_lora.yaml`) to also work as override files based on the new merging logic.
     * *Action:* Updated the toy config immersives.
 
-**Outcome:** The session resulted in a functional Python project for SFT (Full and LoRA) with supporting scripts, configuration files for main experiments and testing, documentation, and presentation/report outlines, developed through a collaborative process with significant user guidance and correction.
+---
+## Post-Refinement Development & Analysis (Continued from above)
+
+13. **Model Change (Gemma 9B -> 2B):**
+    * Based on user observation of high baseline accuracy (~86%) for `gemma-9b-it`, the decision was made to switch to `google/gemma-2b-it` to better observe the impact of fine-tuning.
+    * *Action:* Updated `model.name` in the base `config.yaml` (Artifact ID: `sft_config_yaml`). Updated `README.md` (Artifact ID: `readme_txt_gemma2b`) to reflect this change and the reasoning.
+
+14. **Script Debugging & Enhancement (Post-Model Change):**
+    * **`evaluate.py` / `inference.py` / `utils.py`:** Addressed various errors arising from changes or previous oversights:
+        * `TypeError` / `NameError` in `evaluate.py` related to `load_model_and_tokenizer` arguments and missing `sys` import. -> Fixed script logic and imports.
+        * `ImportError` / `NameError` in `inference.py` related to missing utility functions (`read_jsonl`, `write_jsonl`, `init_wandb`) and logger scope. -> Added functions to `utils.py` and adjusted script structure.
+        * `OverflowError` in `inference.py` tokenizer call. -> Fixed by simplifying `max_length` calculation to use config value directly.
+        * Corrected `inference.py` to look for `one_shot_example` instead of `few_shot_example` in config.
+    * **`train.py` (Artifact ID: `sft_train_py`):**
+        * Implemented **label masking** in the tokenization step to ensure loss calculation only on answer tokens.
+        * Fixed `ValueError` related to `remove_columns` during tokenization map (ensured all pre-tokenization columns were removed).
+        * Fixed `NameError` for dataset variable name mismatch (`train_dataset` vs `tokenized_train_dataset`).
+        * **LoRA + Gradient Checkpointing Debugging:** Addressed persistent `RuntimeError: element 0 of tensors does not require grad...` when LoRA and GC were enabled. This involved:
+            * Discussing memory trade-offs (activations vs parameters/optimizer states).
+            * Verifying PEFT was creating trainable parameters via `print_trainable_parameters()`.
+            * Ruling out issues with `prepare_model_for_kbit_training` (removed call).
+            * Ruling out issues with explicit `model.gradient_checkpointing_enable()` (removed call).
+            * Identifying the likely incompatibility between the PEFT model and default GC implementation.
+            * **Resolution:** Added `gradient_checkpointing_kwargs={'use_reentrant': False}` to `TrainingArguments` when GC is enabled in config. User confirmed this resolved the error.
+    * **Evaluation Speed:** Discussed why sample-by-sample evaluation was slow. Implemented **batched evaluation** in `evaluate.py` using `DataLoader` and `DataCollatorWithPadding` for significant speedup (Artifact ID: `sft_evaluate_py_generated`).
+    * **Output Filenaming:** Implemented user-requested detailed output filename convention for both `inference.py` and `evaluate.py` based on config file, data file/split, model type, base model name, and dataset config name. Evaluation results directed to `./eval_results/`.
+
+15. **WandB Logging Refinement:**
+    * Investigated issue where training metrics weren't appearing in WandB Charts/Summary despite system metrics logging and `report_to=["wandb"]` being confirmed in config.
+    * Deduced it was likely a WandB UI/sync issue as `wandb.init` was clearly working.
+    * *Action:* Added an explicit `wandb.log(final_metrics)` call at the end of successful training runs in `train.py` as a safeguard to ensure summary data was sent directly. User later observed charts appearing in the "Workspace" tab.
+
+16. **Results Analysis & Reporting:**
+    * **LoRA vs. Full SFT Speed:** Discussed why LoRA wasn't dramatically faster than Full SFT for `gemma-2b-it`, attributing it to the forward pass dominating step time. Approximated LoRA parameter count (~30M).
+    * **Log Parsing & Chart Generation:** User uploaded training logs. Generated Python script (`training_report_generator`) to parse logs and create comparison charts (Loss, Grad Norm, Throughput) and a summary metrics table.
+    * **Evaluation Analysis:** User uploaded evaluation JSON results. Acknowledged receipt.
+    * **Final Report Generation:** Created a Markdown report (`training_evaluation_report`) summarizing findings, incorporating the generated charts (via placeholders), evaluation results table, and analysis (including Loss vs. Performance mismatch between Socratic/Main datasets).
+    * **Markdown Image Linking:** Fixed image links in the report for GitHub compatibility (Reference -> Inline style).
+    * **Report Reorganization:** Reorganized the final report (`training_evaluation_report`) chronologically based on user feedback to better reflect the project's evolution. *(Correction: This summary report was reorganized instead based on user correction).*
+
+17. **Capability Discussions:** Answered user questions regarding capabilities for creating Google Slides/Docs (cannot create files directly, but can provide content) and Markdown image syntax.
+
+**Outcome:** The session successfully navigated numerous development and debugging challenges, resulting in functional Python scripts for Full SFT and LoRA training, evaluation, and inference, along with supporting configuration files, documentation, analysis code, and a final summary report, all shaped by iterative user feedback and collaboration.
