@@ -1,3 +1,4 @@
+# src/sft_project/inference.py
 """Script for running inference with base or fine-tuned models."""
 
 import os
@@ -82,7 +83,8 @@ def run_inference(
     results = []
 
     # --- Get Generation Parameters ---
-    gen_cfg = cfg.get("inference", cfg.get("evaluation", {})) # Use inference settings if available
+    # Use inference settings if available, otherwise fallback to evaluation settings
+    gen_cfg = cfg.get("inference", cfg.get("evaluation", {}))
     generation_kwargs = {
         "max_new_tokens": gen_cfg.get("max_new_tokens", 256),
         "pad_token_id": tokenizer.pad_token_id,
@@ -98,10 +100,12 @@ def run_inference(
 
     logger.info(f"Using generation parameters: {generation_kwargs}")
 
-    # --- Prepare Prompts ---
+    # --- Prepare Prompts (initial formatting) ---
     try:
-        formatted_prompts = [format_prompt(sample, cfg)["prompt"] for sample in input_data]
-        logger.info(f"Formatted {len(formatted_prompts)} prompts.")
+        # Get the base formatted prompts first
+        formatted_samples = [format_prompt(sample, cfg) for sample in input_data]
+        base_prompts = [sample["prompt"] for sample in formatted_samples] # Extract the prompt part
+        logger.info(f"Formatted {len(base_prompts)} base prompts.")
     except KeyError:
         logger.error("Failed to format prompts. Ensure `format_prompt` returns a dict with a 'prompt' key and input data has required fields.", exc_info=True)
         return []
@@ -110,22 +114,61 @@ def run_inference(
         return []
 
     # --- Inference Loop ---
-    progress_bar = tqdm(total=len(formatted_prompts), desc="Running Inference", disable=not accelerator.is_local_main_process)
+    progress_bar = tqdm(total=len(base_prompts), desc="Running Inference", disable=not accelerator.is_local_main_process)
 
-    for i, prompt_text in enumerate(formatted_prompts):
+    for i, base_prompt_text in enumerate(base_prompts):
+
+        # --- Prepend Base Model Instructions/Few-Shot if needed ---
+        instruction_text = ""
+        few_shot_text = ""
+        final_prompt_text = base_prompt_text # Default to base prompt
+
+        if is_base_model_eval:
+            # Get instruction from config (inference > evaluation > default)
+            instruction_text = cfg.inference.get("base_model_instruction",
+                                                 cfg.evaluation.get("base_model_instruction",
+                                                                    "You are a helpful assistant.")) # Generic default
+            if instruction_text:
+                 instruction_text += "\n\n" # Add spacing
+                 logger.debug(f"Using base model instruction text.")
+
+            # Check for few-shot strategy (inference > evaluation > default)
+            strategy = cfg.inference.get("base_model_prompt_strategy",
+                                         cfg.evaluation.get("base_model_prompt_strategy", "zero_shot"))
+            logger.debug(f"Base model inference strategy: {strategy}")
+
+            if strategy == "one_shot":
+                # Get example from config (inference > evaluation > default=None)
+                one_shot_example = cfg.inference.get("few_shot_example",
+                                                     cfg.evaluation.get("few_shot_example", None))
+                if one_shot_example and isinstance(one_shot_example, DictConfig) and \
+                   one_shot_example.get("question") and one_shot_example.get("answer"):
+                    # Format the one-shot example (assuming question/answer keys like GSM8K)
+                    q = one_shot_example.question
+                    a = one_shot_example.answer
+                    # Adapt keys if your few-shot example uses different ones (e.g., 'input', 'output')
+                    few_shot_text = f"Question: {q}\nAnswer: {a}\n\n" # Match GSM8K format
+                    logger.info("Using one-shot example for base model.")
+                else:
+                    logger.warning("One-shot strategy requested for base model, but 'few_shot_example' is missing, invalid, or lacks 'question'/'answer' in config.")
+            elif strategy != "zero_shot":
+                 logger.warning(f"Unknown base_model_prompt_strategy '{strategy}'. Using zero-shot.")
+
+            # Construct the final prompt for the base model
+            final_prompt_text = instruction_text + few_shot_text + base_prompt_text
+
         # --- Tokenization ---
         buffer = 10 # Add a small buffer for safety
 
-        # --- Determine max_model_len *directly from config* ---
+        # Determine max_model_len *directly from config*
         max_model_len = int(cfg.dataset.get('max_seq_length', 2048)) # Default to 2048 if not in config
         logger.debug(f"Using max_seq_length from config: {max_model_len}")
-        # --- End max_model_len determination ---
 
         # Ensure max_new_tokens is reasonable compared to max_model_len
         max_new_tokens = int(generation_kwargs.get("max_new_tokens", 256)) # Ensure int
         if max_new_tokens >= max_model_len:
             logger.warning(f"max_new_tokens ({max_new_tokens}) >= max_model_len ({max_model_len}). Setting max_new_tokens to {max_model_len // 2} to allow for input.")
-            max_new_tokens = max_model_len // 2 # Adjust to something reasonable, ensuring space for input
+            max_new_tokens = max_model_len // 2
 
         # Calculate max_input_length for truncation
         max_input_length = max_model_len - max_new_tokens - buffer
@@ -133,62 +176,57 @@ def run_inference(
 
         # Check if calculated max_input_length is valid
         if max_input_length <= 0:
-            logger.error(f"Calculated max_input_length ({max_input_length}) is zero or negative. Model max length ({max_model_len}) might be too small for max_new_tokens ({max_new_tokens}). Skipping sample {i}.")
+            logger.error(f"Calculated max_input_length ({max_input_length}) is zero or negative. Skipping sample {i}.")
             output_sample = {**input_data[i], "completion": "[ERROR: Input length calculation failed]"}
             results.append(output_sample)
             progress_bar.update(1)
             continue
 
-        # Tokenize the input, catching potential OverflowError
+        # Tokenize the final prompt text (potentially with instructions prepended)
         try:
             inputs = tokenizer(
-                prompt_text,
+                final_prompt_text, # Use the potentially modified prompt
                 return_tensors="pt",
-                padding=False, # No padding needed for single inference
-                truncation=True, # Enable truncation
+                padding=False,
+                truncation=True,
                 max_length=int(max_input_length) # Ensure it's an integer
             )
             inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
 
         except OverflowError as oe:
-             logger.error(f"OverflowError during tokenization for sample {i}. This likely means max_input_length ({max_input_length}) is invalid for the tokenizer backend. Error: {oe}", exc_info=True)
+             logger.error(f"OverflowError during tokenization for sample {i}. max_input_length={max_input_length}. Error: {oe}", exc_info=True)
              output_sample = {**input_data[i], "completion": "[ERROR: Tokenization Overflow]"}
              results.append(output_sample)
              progress_bar.update(1)
-             continue # Skip to the next sample
+             continue
         except Exception as e:
              logger.error(f"Unexpected error during tokenization for sample {i}: {e}", exc_info=True)
              output_sample = {**input_data[i], "completion": "[ERROR: Tokenization Failed]"}
              results.append(output_sample)
              progress_bar.update(1)
-             continue # Skip to the next sample
+             continue
 
 
         # --- Generation ---
         try:
-            # Use the generation parameters defined earlier
             outputs = model.generate(**inputs, **generation_kwargs)
-            # Decode only the newly generated tokens, skipping special tokens
             completion_tokens = outputs[0][inputs['input_ids'].shape[1]:]
             completion = tokenizer.decode(completion_tokens, skip_special_tokens=True)
 
             # --- Store Result ---
-            # Merge the original input data with the generated completion
-            output_sample = {**input_data[i], "completion": completion}
+            output_sample = {**input_data[i], "completion": completion} # Use original input_data[i] for merging
             results.append(output_sample)
 
         except Exception as e:
-            # Log generation errors, but don't include full traceback by default to avoid clutter
             logger.error(f"Generation error for sample {i}: {e}", exc_info=False)
-            # Store an error message in the results for this sample
             output_sample = {**input_data[i], "completion": "[ERROR: Generation Failed]"}
             results.append(output_sample)
 
-        progress_bar.update(1) # Update progress bar after processing each sample
+        progress_bar.update(1)
 
-    progress_bar.close() # Close progress bar after the loop
+    progress_bar.close()
     logger.info(f"Inference completed for {len(results)} samples.")
-    return results # Return the list of results (dictionaries)
+    return results
 
 
 def main():
@@ -216,7 +254,7 @@ def main():
         logger.error(f"Exiting due to base model/tokenizer loading failure: {e}", exc_info=True); sys.exit(1)
 
     # --- Load Fine-Tuned Model/Adapter if necessary ---
-    is_base_model_eval = args.use_base_model
+    is_base_model_eval = args.use_base_model # Determine if evaluating base model
 
     if not is_base_model_eval:
         tuning_method = cfg.get("tuning_method", "full")
@@ -262,7 +300,6 @@ def main():
 
     # --- Load Input Data from Config ---
     try:
-        # Get input file path from config (e.g., under 'inference' block)
         input_file_path_str = cfg.inference.input_file
         input_file_path = Path(input_file_path_str)
         logger.info(f"Loading input data from config path: {input_file_path}")
@@ -274,10 +311,11 @@ def main():
     if not input_file_path.exists():
         logger.error(f"Input file specified in config not found: {input_file_path}"); sys.exit(1)
     try:
-        input_data = read_jsonl(str(input_file_path))
-        if not input_data:
-             logger.warning(f"Input file {input_file_path} is empty or could not be read."); sys.exit(0) # Exit gracefully if no data
-        logger.info(f"Loaded {len(input_data)} samples from input file.")
+        # Read the original input data dictionaries
+        input_data_dicts = read_jsonl(str(input_file_path))
+        if not input_data_dicts:
+             logger.warning(f"Input file {input_file_path} is empty or could not be read."); sys.exit(0)
+        logger.info(f"Loaded {len(input_data_dicts)} samples from input file.")
     except Exception as e:
         logger.error(f"Failed to read input file {input_file_path}: {e}", exc_info=True); sys.exit(1)
 
@@ -287,13 +325,11 @@ def main():
         config_path = Path(args.config_path)
         config_stem = config_path.stem
         data_stem = input_file_path.stem
-        # Place output file in the same directory as the input data file
         output_filename = f"{config_stem}_{data_stem}_results.jsonl"
         output_file_path = input_file_path.parent / output_filename
         logger.info(f"Output will be saved to: {output_file_path}")
     except Exception as e:
         logger.error(f"Failed to construct output file path: {e}", exc_info=True)
-        # output_file_path remains None
 
 
     # --- Prepare Model with Accelerator ---
@@ -303,8 +339,9 @@ def main():
 
     # --- Run Inference ---
     logger.info("Starting inference process...")
+    # Pass the original dictionaries to run_inference
     inference_results = run_inference(
-        model, tokenizer, input_data, cfg, accelerator, is_base_model_eval
+        model, tokenizer, input_data_dicts, cfg, accelerator, is_base_model_eval
     )
 
     # --- Save Results (only on main process) ---
@@ -312,7 +349,6 @@ def main():
         if inference_results and output_file_path: # Check if results exist and path was constructed
             logger.info(f"Saving inference results to: {output_file_path}")
             try:
-                # write_jsonl handles directory creation now
                 write_jsonl(str(output_file_path), inference_results)
                 logger.info("Results saved successfully.")
             except Exception as e:
