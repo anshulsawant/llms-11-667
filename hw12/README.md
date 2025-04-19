@@ -5,7 +5,7 @@ This project performs supervised fine-tuning (SFT) of a large language model usi
 ## Project Structure
 
 ```text
-your_project_root/
+llms-11-667/hw12/
 ├── src/
 │   └── sft_project/       # Python package source code
 │       ├── __init__.py    # Marks directory as Python package
@@ -28,8 +28,8 @@ your_project_root/
 
 **a. Clone Repository**
 ```bash
-git clone <your-repository-url>
-cd your_project_root
+git clone https://github.com/anshulsawant/llms-11-667.git
+cd llms-11-667/hw12 
 ```
 **b. Create Virtual Environment**
 ```bash
