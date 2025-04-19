@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 import sys
 
 # --- Setup logger FIRST ---
+# Changed default level to INFO, but DEBUG can be useful for length issues
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 # --- End logger setup ---
@@ -113,40 +114,81 @@ def run_inference(
 
     for i, prompt_text in enumerate(formatted_prompts):
         # --- Tokenization ---
-        buffer = 10
-        max_model_len = getattr(tokenizer, 'model_max_length', cfg.dataset.get('max_seq_length', 2048))
-        max_input_length = max_model_len - generation_kwargs["max_new_tokens"] - buffer
+        buffer = 10 # Add a small buffer for safety
 
+        # --- Determine max_model_len *directly from config* ---
+        max_model_len = int(cfg.dataset.get('max_seq_length', 2048)) # Default to 2048 if not in config
+        logger.debug(f"Using max_seq_length from config: {max_model_len}")
+        # --- End max_model_len determination ---
+
+        # Ensure max_new_tokens is reasonable compared to max_model_len
+        max_new_tokens = int(generation_kwargs.get("max_new_tokens", 256)) # Ensure int
+        if max_new_tokens >= max_model_len:
+            logger.warning(f"max_new_tokens ({max_new_tokens}) >= max_model_len ({max_model_len}). Setting max_new_tokens to {max_model_len // 2} to allow for input.")
+            max_new_tokens = max_model_len // 2 # Adjust to something reasonable, ensuring space for input
+
+        # Calculate max_input_length for truncation
+        max_input_length = max_model_len - max_new_tokens - buffer
+        logger.debug(f"Calculated max_input_length: {max_input_length} (max_model_len={max_model_len}, max_new_tokens={max_new_tokens}, buffer={buffer})")
+
+        # Check if calculated max_input_length is valid
         if max_input_length <= 0:
-            logger.error(f"Model max length ({max_model_len}) is too small for max_new_tokens ({generation_kwargs['max_new_tokens']}). Skipping sample {i}.")
-            output_sample = {**input_data[i], "completion": "[ERROR: Input too long]"}
+            logger.error(f"Calculated max_input_length ({max_input_length}) is zero or negative. Model max length ({max_model_len}) might be too small for max_new_tokens ({max_new_tokens}). Skipping sample {i}.")
+            output_sample = {**input_data[i], "completion": "[ERROR: Input length calculation failed]"}
             results.append(output_sample)
             progress_bar.update(1)
             continue
 
-        inputs = tokenizer(prompt_text, return_tensors="pt", padding=False, truncation=True, max_length=max_input_length)
-        inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
+        # Tokenize the input, catching potential OverflowError
+        try:
+            inputs = tokenizer(
+                prompt_text,
+                return_tensors="pt",
+                padding=False, # No padding needed for single inference
+                truncation=True, # Enable truncation
+                max_length=int(max_input_length) # Ensure it's an integer
+            )
+            inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
+
+        except OverflowError as oe:
+             logger.error(f"OverflowError during tokenization for sample {i}. This likely means max_input_length ({max_input_length}) is invalid for the tokenizer backend. Error: {oe}", exc_info=True)
+             output_sample = {**input_data[i], "completion": "[ERROR: Tokenization Overflow]"}
+             results.append(output_sample)
+             progress_bar.update(1)
+             continue # Skip to the next sample
+        except Exception as e:
+             logger.error(f"Unexpected error during tokenization for sample {i}: {e}", exc_info=True)
+             output_sample = {**input_data[i], "completion": "[ERROR: Tokenization Failed]"}
+             results.append(output_sample)
+             progress_bar.update(1)
+             continue # Skip to the next sample
+
 
         # --- Generation ---
         try:
+            # Use the generation parameters defined earlier
             outputs = model.generate(**inputs, **generation_kwargs)
+            # Decode only the newly generated tokens, skipping special tokens
             completion_tokens = outputs[0][inputs['input_ids'].shape[1]:]
             completion = tokenizer.decode(completion_tokens, skip_special_tokens=True)
 
             # --- Store Result ---
+            # Merge the original input data with the generated completion
             output_sample = {**input_data[i], "completion": completion}
             results.append(output_sample)
 
         except Exception as e:
+            # Log generation errors, but don't include full traceback by default to avoid clutter
             logger.error(f"Generation error for sample {i}: {e}", exc_info=False)
+            # Store an error message in the results for this sample
             output_sample = {**input_data[i], "completion": "[ERROR: Generation Failed]"}
             results.append(output_sample)
 
-        progress_bar.update(1)
+        progress_bar.update(1) # Update progress bar after processing each sample
 
-    progress_bar.close()
+    progress_bar.close() # Close progress bar after the loop
     logger.info(f"Inference completed for {len(results)} samples.")
-    return results
+    return results # Return the list of results (dictionaries)
 
 
 def main():
@@ -220,6 +262,7 @@ def main():
 
     # --- Load Input Data from Config ---
     try:
+        # Get input file path from config (e.g., under 'inference' block)
         input_file_path_str = cfg.inference.input_file
         input_file_path = Path(input_file_path_str)
         logger.info(f"Loading input data from config path: {input_file_path}")
@@ -233,12 +276,13 @@ def main():
     try:
         input_data = read_jsonl(str(input_file_path))
         if not input_data:
-             logger.warning(f"Input file {input_file_path} is empty or could not be read."); sys.exit(0)
+             logger.warning(f"Input file {input_file_path} is empty or could not be read."); sys.exit(0) # Exit gracefully if no data
         logger.info(f"Loaded {len(input_data)} samples from input file.")
     except Exception as e:
         logger.error(f"Failed to read input file {input_file_path}: {e}", exc_info=True); sys.exit(1)
 
     # --- Construct Output File Path ---
+    output_file_path = None # Initialize to None
     try:
         config_path = Path(args.config_path)
         config_stem = config_path.stem
@@ -249,8 +293,7 @@ def main():
         logger.info(f"Output will be saved to: {output_file_path}")
     except Exception as e:
         logger.error(f"Failed to construct output file path: {e}", exc_info=True)
-        # Decide if we should exit or proceed without saving
-        output_file_path = None # Set to None to prevent saving attempt later
+        # output_file_path remains None
 
 
     # --- Prepare Model with Accelerator ---
@@ -269,8 +312,7 @@ def main():
         if inference_results and output_file_path: # Check if results exist and path was constructed
             logger.info(f"Saving inference results to: {output_file_path}")
             try:
-                # write_jsonl handles directory creation now, but double-check if needed
-                # output_file_path.parent.mkdir(parents=True, exist_ok=True)
+                # write_jsonl handles directory creation now
                 write_jsonl(str(output_file_path), inference_results)
                 logger.info("Results saved successfully.")
             except Exception as e:
@@ -278,10 +320,10 @@ def main():
         elif not inference_results:
             logger.warning("Inference process completed, but no results were generated. Output file will not be created.")
         else: # Results exist but output_file_path is None
-             logger.error("Output file path could not be constructed. Results were not saved.")
+             logger.error("Output file path could not be constructed or was invalid. Results were not saved.")
 
 
-    accelerator.wait_for_everyone()
+    accelerator.wait_for_everyone() # Ensure all processes finish before exiting
     logger.info("Inference script finished.")
 
 if __name__ == "__main__":
