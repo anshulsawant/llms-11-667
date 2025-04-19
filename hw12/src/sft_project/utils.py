@@ -17,6 +17,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizer,
 )
+from accelerate import Accelerator
 # Note: PeftModel import is NOT needed here, as adapters are loaded in the main scripts.
 
 # --- Added WandB import ---
