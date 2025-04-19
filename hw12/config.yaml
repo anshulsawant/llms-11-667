@@ -64,7 +64,7 @@ evaluation: # Settings used by evaluate.py (and fallback for inference.py)
   max_new_tokens: 256
   temperature: 0.1
   do_sample: true
-  base_model_prompt_strategy: "zero_shot" # Strategy for base model prompting
+  base_model_prompt_strategy: "one_shot" # Strategy for base model prompting
   # --- Added base model instruction ---
   base_model_instruction: "You are a helpful math assistant. Please provide a step-by-step derivation and end your answer with the final numerical result in the format '#### <number>'."
   # --- End added base model instruction ---
@@ -88,5 +88,5 @@ inference:
   # --- Base model instruction (primary source for inference.py) ---
   base_model_instruction: "You are a helpful math assistant. Please provide a step-by-step derivation and end your answer with the final numerical result in the format '#### <number>'."
   # --- Also consider adding strategy/example here if needed for inference specifically ---
-  base_model_prompt_strategy: "zero_shot" # Example: maybe inference uses zero-shot
+  base_model_prompt_strategy: "one_shot" # Example: maybe inference uses zero-shot
 # --- End inference section ---
