@@ -12,17 +12,16 @@ from peft import PeftModel
 from omegaconf import DictConfig # Keep DictConfig for type hint
 from tqdm.auto import tqdm
 
-# Import load_config from sft_script
+# --- Import load_config from utils ---
 try:
-    from .sft_script import load_config
+    # Use relative import assuming utils.py is in the same directory
+    from .utils import load_config, load_model_and_tokenizer, read_jsonl, write_jsonl, extract_gsm8k_answer
 except ImportError:
-    # Basic implementation if import fails (e.g., running standalone)
-    logger.error("Failed to import 'load_config' from sft_script. Using basic loader.")
-    from omegaconf import OmegaConf
-    def load_config(override_config_path: str, base_config_path: str = "config.yaml") -> DictConfig:
-        base_conf = OmegaConf.load(base_config_path)
-        override_conf = OmegaConf.load(override_config_path)
-        return OmegaConf.merge(base_conf, override_conf)
+    logger.error("Failed to import functions from .utils. Make sure utils.py is in the same directory (src/sft_project) and run as part of the package.")
+    # If running scripts directly without installing the package, imports might fail.
+    # Consider adding the src directory to PYTHONPATH if needed for direct execution.
+    raise
+# --- End import ---
 
 
 # Configure logging
@@ -33,8 +32,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# GSM8K prompt format
+# GSM8K prompt format (Consider moving to utils or config if used elsewhere)
 PROMPT_FORMAT = "Question: {question}\nAnswer: "
+
+
+# --- Removed copied load_config function definition ---
 
 
 def parse_arguments():
@@ -43,134 +45,89 @@ def parse_arguments():
     parser.add_argument( "--config_path", type=str, required=True, help="Path to the specific override configuration YAML file.")
     parser.add_argument( "--base_config_path", type=str, default="config.yaml", help="Path to the base configuration YAML file.")
     parser.add_argument( "--use_base_model", action="store_true", help="Force inference using the base model specified in the config.")
+    # Removed other CLI args - now read from config's inference section
     args = parser.parse_args()
     return args
 
-# --- Updated load_model_tokenizer ---
-def load_model_tokenizer(
-    model_name_or_path: str,
-    precision: str,
-    hf_token: Optional[str],
-    trust_remote_code: bool,
-    adapter_path: Optional[str] = None
-) -> (AutoModelForCausalLM, AutoTokenizer):
-    """Loads the specified base model and tokenizer, optionally applying LoRA adapters."""
-    logger.info(f"Loading model/tokenizer: {model_name_or_path}")
-    if adapter_path: logger.info(f"Will apply LoRA adapter from: {adapter_path}")
+# --- load_model_tokenizer is now imported from utils ---
+# --- read_jsonl is now imported from utils ---
+# --- write_jsonl is now imported from utils ---
 
-    if precision == "bf16": dtype = torch.bfloat16
-    elif precision == "fp16": dtype = torch.float16
-    else: dtype = torch.float32
-    logger.info(f"Using precision: {precision} ({dtype})")
-
-    if torch.cuda.is_available(): device_map = "auto"; logger.info("CUDA available.")
-    else: device_map = "cpu"; logger.info("CUDA not available, using CPU.")
-
-    try:
-        model = AutoModelForCausalLM.from_pretrained( model_name_or_path, torch_dtype=dtype, token=hf_token, device_map=device_map, trust_remote_code=trust_remote_code)
-
-        tokenizer_load_path = model_name_or_path
-        if adapter_path: logger.info(f"Loading tokenizer from base model path: {model_name_or_path}")
-
-        # --- Set padding_side to 'left' ---
-        tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_load_path,
-            token=hf_token,
-            padding_side="left" # Use left padding for decoder-only models
-        )
-        # --- End change ---
-
-        if adapter_path:
-            logger.info(f"Loading LoRA adapter from: {adapter_path}")
-            try:
-                model = PeftModel.from_pretrained(model, adapter_path)
-                logger.info("Successfully loaded LoRA adapter.")
-            except Exception as peft_e: logger.error(f"Failed to load PEFT adapter: {peft_e}", exc_info=True); logger.warning("Proceeding with base model only.")
-
-        # Set pad token if missing - essential for left padding
-        if tokenizer.pad_token is None:
-            logger.warning("Tokenizer does not have a pad token. Setting pad_token to eos_token.")
-            tokenizer.pad_token = tokenizer.eos_token
-            # Important: Update model config pad_token_id as well
-            if hasattr(model, 'config'):
-                 model.config.pad_token_id = tokenizer.pad_token_id # Use the tokenizer's pad token id
-
-        logger.info("Model and tokenizer ready.")
-        return model, tokenizer
-    except Exception as e:
-        logger.error(f"Failed to load model or tokenizer: {e}", exc_info=True)
-        raise
-# --- End updated load_model_tokenizer ---
-
-
-def read_jsonl(file_path: Path) -> List[Dict[str, Any]]:
-    # (Implementation remains the same)
-    data = []; logger.info(f"Reading input file: {file_path}")
-    try:
-        with file_path.open('r', encoding='utf-8') as f:
-            for i, line in enumerate(f):
-                if line.strip(): data.append(json.loads(line))
-        logger.info(f"Read {len(data)} records.")
-        return data
-    except FileNotFoundError: logger.error(f"Input file not found: {file_path}"); raise
-    except json.JSONDecodeError as e: logger.error(f"Error decoding JSON line {i+1} in {file_path}: {e}"); raise
-    except Exception as e: logger.error(f"Error reading input file {file_path}: {e}"); raise
-
-def write_jsonl(file_path: Path, data: List[Dict[str, Any]]):
-    # (Implementation remains the same)
-    try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        with file_path.open('w', encoding='utf-8') as f:
-            for item in data: f.write(json.dumps(item) + '\n')
-        logger.info(f"Successfully wrote {len(data)} records to: {file_path}")
-    except Exception as e: logger.error(f"Error writing output file {file_path}: {e}"); raise
-
+# --- run_inference remains here as it's specific to this script's workflow ---
 @torch.no_grad()
 def run_inference(
     model: AutoModelForCausalLM, tokenizer: AutoTokenizer, data: List[Dict[str, Any]],
     prompt_field: str, output_field: str, batch_size: int,
     max_new_tokens: int, temperature: float, do_sample: bool,
-    config_max_seq_len: int
+    config_max_seq_len: int # Max sequence length from config
 ) -> List[Dict[str, Any]]:
-    # (Implementation remains the same)
+    """Runs inference on the data and adds generations."""
     model.eval(); all_prompts = []; valid_indices = []
+    logger.info(f"Using prompt field: '{prompt_field}', Output field: '{output_field}'")
     for i, item in enumerate(data):
-        if prompt_field in item and isinstance(item[prompt_field], str):
+        if prompt_field in item and isinstance(item[prompt_field], str) and item[prompt_field]:
+            # Use the format_prompt function if available and applicable?
+            # Or stick to the simpler PROMPT_FORMAT here? Let's stick to simpler for now.
+            # formatted_prompt_obj = format_prompt(item, cfg) # Requires cfg access
             formatted_prompt = PROMPT_FORMAT.format(question=item[prompt_field])
             all_prompts.append(formatted_prompt); valid_indices.append(i)
-        else: logger.warning(f"Skipping record {i+1}: Invalid prompt field '{prompt_field}'.")
+        else:
+            logger.warning(f"Skipping record {i+1}: Missing, empty, or invalid prompt field '{prompt_field}'. Found: {item.get(prompt_field)}")
+
     if not all_prompts: logger.warning("No valid prompts found."); return data
+
     logger.info(f"Processing {len(all_prompts)} valid prompts in batches of {batch_size}...")
     generations = []; num_batches = (len(all_prompts) + batch_size - 1) // batch_size
     gen_kwargs = {"max_new_tokens": max_new_tokens, "temperature": temperature, "do_sample": do_sample, "pad_token_id": tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id, "eos_token_id": tokenizer.eos_token_id}
     if gen_kwargs["eos_token_id"] is None: logger.warning("EOS token ID is None.")
+
     progress_bar = tqdm(range(num_batches), desc="Generating", disable=False)
     for i in progress_bar:
         batch_start = i * batch_size; batch_end = min((i + 1) * batch_size, len(all_prompts))
         batch_prompts = all_prompts[batch_start:batch_end]
+
         max_input_len = config_max_seq_len - max_new_tokens
-        if max_input_len <= 0: logger.error(f"Config max_seq_length too small."); generations.extend(["[ERROR: Input too long]"] * len(batch_prompts)); continue
-        # Tokenizer now uses left padding by default if initialized correctly
+        if max_input_len <= 0: logger.error(f"Config max_seq_length ({config_max_seq_len}) too small for max_new_tokens ({max_new_tokens})."); generations.extend(["[ERROR: Input too long]"] * len(batch_prompts)); continue
+
         inputs = tokenizer(batch_prompts, return_tensors="pt", padding=True, truncation=True, max_length=max_input_len).to(model.device)
+
         try:
             outputs = model.generate(**inputs, **gen_kwargs)
             batch_completions = []
             for j, output in enumerate(outputs):
-                input_length = inputs['input_ids'][j].shape[0]; completion_tokens = output[input_length:]
-                completion = tokenizer.decode(completion_tokens, skip_special_tokens=True)
+                # Ensure slicing doesn't go out of bounds if generation is short
+                input_len = inputs['input_ids'][j].shape[0]
+                if output.shape[0] > input_len:
+                     completion_tokens = output[input_len:]
+                     completion = tokenizer.decode(completion_tokens, skip_special_tokens=True)
+                else:
+                     completion = "" # Handle case where nothing new is generated
                 batch_completions.append(completion)
             generations.extend(batch_completions)
         except Exception as gen_e: logger.error(f"Generation error batch {i+1}: {gen_e}", exc_info=False); generations.extend(["[ERROR: Generation Failed]"] * len(batch_prompts))
-    output_data = data
-    if len(generations) != len(valid_indices): logger.error(f"Mismatch generations ({len(generations)}) vs valid prompts ({len(valid_indices)}).")
+
+    output_data = data # Start with original data
+    if len(generations) != len(valid_indices): logger.error(f"Mismatch generations ({len(generations)}) vs valid prompts ({len(valid_indices)}). Output alignment error.")
+
     gen_idx = 0
+    # Add generation to corresponding original item using valid_indices
     for data_idx in valid_indices:
-        if gen_idx < len(generations): output_data[data_idx][output_field] = generations[gen_idx]; gen_idx += 1
-        else: output_data[data_idx][output_field] = "[ERROR: Missing Generation]"
+        if gen_idx < len(generations):
+            output_data[data_idx][output_field] = generations[gen_idx]
+            gen_idx += 1
+        else:
+            # Should not happen if lengths match check passes, but defensively add error
+            if data_idx < len(output_data):
+                 output_data[data_idx][output_field] = "[ERROR: Missing Generation]"
+
+    # Mark items that were skipped initially
     for i, item in enumerate(output_data):
-        if i not in valid_indices and output_field not in item: item[output_field] = "[SKIPPED: Invalid Input]"
+        if i not in valid_indices and output_field not in item:
+             item[output_field] = "[SKIPPED: Invalid Input]"
+
     logger.info("Finished generating completions.")
     return output_data
+
 
 def main():
     """Main function to orchestrate loading, inference, and writing."""
@@ -179,6 +136,7 @@ def main():
     logger.info(f"CLI Arguments: {vars(args)}")
 
     try:
+        # Use the imported load_config function
         cfg = load_config(override_config_path=args.config_path, base_config_path=args.base_config_path)
         logger.info(f"Successfully loaded config from: {args.config_path} (overriding {args.base_config_path})")
     except Exception as e: logger.error(f"Failed to load configuration: {e}", exc_info=True); sys.exit(1)
@@ -207,8 +165,10 @@ def main():
     # Get parameters ONLY from config
     inference_cfg = cfg.get("inference"); dataset_cfg = cfg.get("dataset", {})
     if not inference_cfg: logger.error("Config missing required 'inference' section."); sys.exit(1)
-    input_file_str = inference_cfg.get("input_file"); output_dir_str = inference_cfg.get("output_dir", ".")
-    prompt_field = inference_cfg.get("prompt_field", "question"); output_field = inference_cfg.get("output_field", "generation")
+    input_file_str = inference_cfg.get("input_file")
+    output_dir_str = inference_cfg.get("output_dir", ".")
+    prompt_field = inference_cfg.get("prompt_field", "question")
+    output_field = inference_cfg.get("output_field", "generation")
     if not input_file_str: logger.error("Missing 'inference.input_file' in configuration."); sys.exit(1)
     input_file = Path(input_file_str); output_dir = Path(output_dir_str)
     os.makedirs(output_dir, exist_ok=True)
@@ -224,10 +184,13 @@ def main():
     if not input_file.is_file(): logger.error(f"Input file not found: {input_file}"); sys.exit(1)
 
     try:
-        model, tokenizer = load_model_tokenizer( model_load_path, precision, hf_token, trust_remote_code, adapter_load_path)
+        # Use imported load_model_and_tokenizer
+        model, tokenizer = load_model_and_tokenizer( model_load_path, precision, hf_token, trust_remote_code, adapter_load_path)
     except Exception: logger.error("Exiting due to model loading failure."); sys.exit(1)
 
-    try: input_data = read_jsonl(input_file)
+    try:
+        # Use imported read_jsonl
+        input_data = read_jsonl(input_file)
     except Exception: logger.error("Exiting due to input file reading failure."); sys.exit(1)
     if not input_data: logger.warning("Input file empty. Exiting."); sys.exit(0)
 
@@ -240,7 +203,7 @@ def main():
     output_filename = f"{input_filename_stem}__{model_identifier_for_output}__generations.jsonl"
     output_path = output_dir / output_filename
 
-    # Write results
+    # Write results using imported write_jsonl
     try: write_jsonl(output_path, output_data)
     except Exception: logger.error("Exiting due to output file writing failure."); sys.exit(1)
 
