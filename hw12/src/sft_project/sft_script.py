@@ -153,9 +153,8 @@ def load_and_prepare_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dict[str
     return {"train": final_train_dataset, "eval_for_trainer": final_trainer_eval_dataset, "raw_eval_for_generation": raw_eval_dataset_for_generation}
 
 # --- Model Loading ---
-# --- Updated load_model_and_tokenizer ---
 def load_model_and_tokenizer(cfg: DictConfig) -> (AutoModelForCausalLM, AutoTokenizer):
-    """Loads the base model and tokenizer based on the configuration."""
+    # (Implementation remains the same - uses left padding)
     logger.info(f"Loading base model: {cfg.model.name}")
     model_name = cfg.model.name; access_token = cfg.model.access_token; trust_remote_code = cfg.model.trust_remote_code
     model_kwargs = {"trust_remote_code": trust_remote_code, "token": access_token}
@@ -163,29 +162,14 @@ def load_model_and_tokenizer(cfg: DictConfig) -> (AutoModelForCausalLM, AutoToke
     elif cfg.training.fp16: logger.info("Using float16 precision."); model_kwargs["torch_dtype"] = torch.float16
     else: logger.info("Using default float32 precision.")
     model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
-
     logger.info(f"Loading tokenizer for {model_name}")
-    # --- Set padding_side to 'left' ---
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        token=access_token,
-        trust_remote_code=trust_remote_code,
-        padding_side="left", # Use left padding
-        use_fast=True,
-    )
-    # --- End change ---
-
-    # Set pad token if missing - essential for left padding
+    tokenizer = AutoTokenizer.from_pretrained( model_name, token=access_token, trust_remote_code=trust_remote_code, padding_side="left", use_fast=True)
     if tokenizer.pad_token is None:
         logger.warning("Tokenizer does not have a pad token. Setting pad_token to eos_token.")
         tokenizer.pad_token = tokenizer.eos_token
-        # Important: Update model config pad_token_id as well
         model.config.pad_token_id = tokenizer.pad_token_id
-
     logger.info("Base model and tokenizer loaded successfully.")
     return model, tokenizer
-# --- End updated load_model_and_tokenizer ---
-
 
 # --- Evaluation ---
 @torch.no_grad()
@@ -266,7 +250,8 @@ def evaluate_gsm8k( model: AutoModelForCausalLM, tokenizer: AutoTokenizer, datas
 # --- Training ---
 
 def train_model(cfg: DictConfig): # Takes the merged config
-    # (Implementation remains the same - uses standard Trainer init)
+    """Main function to orchestrate the SFT process."""
+
     set_seed(cfg.training.seed); is_wandb_initialized = init_wandb(cfg)
     fsdp_plugin = None
     if Accelerator().distributed_type == DistributedType.FSDP: fsdp_plugin = FullyShardedDataParallelPlugin(state_dict_type="FULL_STATE_DICT")
@@ -310,7 +295,18 @@ def train_model(cfg: DictConfig): # Takes the merged config
              try: OmegaConf.save(cfg, os.path.join(final_save_path, "training_config_merged.yaml"))
              except Exception as e_save: logger.error(f"Failed to save merged config: {e_save}")
              logger.info(f"Final model/adapter saved to {final_save_path}")
-    except Exception as e: logger.error(f"Training error: {e}", exc_info=True); if accelerator.is_main_process: logger.info("Saving state due to error..."); trainer.save_state(); raise
+    # --- Corrected except block ---
+    except Exception as e:
+        logger.error(f"Training error: {e}", exc_info=True)
+        if accelerator.is_main_process:
+            logger.info("Attempting to save state due to error...")
+            try:
+                trainer.save_state()
+            except Exception as save_e:
+                logger.error(f"Failed to save state after training error: {save_e}", exc_info=True)
+        raise # Re-raise the original training error
+    # --- End corrected except block ---
+
     accelerator.wait_for_everyone(); logger.info(f"--- Evaluating Fine-Tuned Model ({tuning_method}) ---")
     eval_model_sft = accelerator.prepare(trainer.model)
     sft_model_metrics = evaluate_gsm8k(eval_model_sft, tokenizer, raw_eval_dataset_for_generation, cfg, accelerator, is_base_model_eval=False)
