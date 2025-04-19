@@ -1,144 +1,227 @@
-# src/sft_project/utils.py
-"""Utility functions shared between training and evaluation scripts."""
+"""Utility functions for the SFT project."""
 
+import os
 import logging
+import json
 import re
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple, List
 
 import torch
-from omegaconf import OmegaConf, DictConfig, ListConfig, MissingMandatoryValue
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import wandb
+import transformers
+from omegaconf import OmegaConf, DictConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizer,
+)
+# Note: PeftModel import is NOT needed here, as adapters are loaded in the main scripts.
 
-logger = logging.getLogger(__name__) # Use logger defined in calling script or configure here
+# Configure logging (optional, could let main scripts handle logging)
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# logger = logging.getLogger(__name__)
 
 # --- Configuration Loading ---
+
 def load_config(override_config_path: str, base_config_path: str = "config.yaml") -> DictConfig:
+    """Loads base config and merges override config."""
+    base_cfg = OmegaConf.load(base_config_path)
+    override_cfg = OmegaConf.load(override_config_path)
+    cfg = OmegaConf.merge(base_cfg, override_cfg)
+    # Optional: Add validation logic here if needed
+    # print(f"Loaded configuration:\n{OmegaConf.to_yaml(cfg)}") # Debug print
+    return cfg
+
+# --- Model and Tokenizer Loading ---
+
+def load_model_and_tokenizer(
+    cfg: DictConfig,
+) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
-    Loads a base configuration and merges it with an override configuration.
-    Performs validation on the merged configuration.
+    Loads the base model and tokenizer based on the configuration.
+    Handles precision, access token, trust_remote_code, and attn_implementation.
+    NOTE: This function ONLY loads the base model specified in cfg.model.name.
+          Adapter/checkpoint loading happens in the calling script (evaluate.py/inference.py).
     """
-    logger.info(f"Loading base configuration from: {base_config_path}")
-    try: base_conf = OmegaConf.load(base_config_path)
-    except Exception as e: logger.error(f"Error loading base config: {e}"); raise
-    logger.info(f"Loading override configuration from: {override_config_path}")
-    try: override_conf = OmegaConf.load(override_config_path)
-    except Exception as e: logger.error(f"Error loading override config: {e}"); raise
-    logger.info("Merging configurations...")
-    try:
-        merged_conf = OmegaConf.merge(base_conf, override_conf)
-        logger.info("Configurations merged successfully.")
-        # --- Validation ---
-        logger.info("Validating merged configuration...")
-        # Basic checks - add more as needed
-        if not merged_conf.get("model") or not merged_conf.model.get("name"): raise ValueError("Config missing 'model.name'.")
-        if not merged_conf.get("training") or not merged_conf.training.get("output_dir"): raise ValueError("Config missing 'training.output_dir'.")
-        if merged_conf.get("tuning_method") == "lora":
-              if not merged_conf.get("lora_config"): raise ValueError("Missing lora_config.")
-              # Add more checks if needed
-        # Add other validation checks from previous sft_script.py version if desired
-        logger.info("Merged configuration validated.")
-        # --- End validation ---
-        return merged_conf
-    except Exception as e: logger.error(f"Error merging/validating config: {e}"); raise
-
-# --- WandB Initialization ---
-def init_wandb(cfg: DictConfig, job_type: str = "train"):
-    """Initializes Weights & Biases if enabled in config."""
-    if "wandb" in cfg.training.get("report_to", []) and cfg.get("wandb"):
-        logger.info(f"Initializing WandB for job type: {job_type}...")
-        try:
-            run_name = cfg.wandb.get("run_name", f"sft-run-{job_type}")
-            # Append tuning method if not already in name from override
-            if cfg.get("tuning_method") and cfg.tuning_method not in run_name:
-                 run_name += f"-{cfg.tuning_method}"
-
-            wandb.init(
-                project=cfg.wandb.project,
-                name=run_name,
-                config=OmegaConf.to_container(cfg, resolve=True),
-                resume="allow",
-                job_type=job_type
-            )
-            # Only watch during training
-            if job_type == "train":
-                watch_log = cfg.wandb.get("watch", "gradients")
-                if cfg.get("tuning_method") == "lora" and watch_log == "gradients":
-                    logger.warning("WandB watching gradients with LoRA might not be optimal.")
-                wandb.watch(models=None, log=watch_log, log_freq=100)
-
-            logger.info("WandB initialized successfully.")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to initialize WandB: {e}")
-            # Optionally modify cfg to remove wandb from report_to if init fails
-            # cfg.training.report_to = [r for r in cfg.training.report_to if r != "wandb"]
-            return False
-    else:
-        logger.info("WandB reporting not configured.")
-        return False
-
-# --- Model Loading ---
-def load_model_and_tokenizer(cfg: DictConfig) -> (AutoModelForCausalLM, AutoTokenizer):
-    """Loads the base model and tokenizer based on the configuration."""
-    logger.info(f"Loading base model: {cfg.model.name}")
     model_name = cfg.model.name
-    access_token = cfg.model.get("access_token", None) # Use get for safety
+    access_token = cfg.model.get("access_token", None)
     trust_remote_code = cfg.model.get("trust_remote_code", False)
+    attn_impl = cfg.model.get("attn_implementation", None) # e.g., "flash_attention_2"
 
-    model_kwargs = {"trust_remote_code": trust_remote_code, "token": access_token}
-    attn_impl = cfg.model.get("attn_implementation", None)
-    if attn_impl: logger.info(f"Setting attn_implementation='{attn_impl}'"); model_kwargs["attn_implementation"] = attn_impl
-
-    # Determine precision from training args (or inference args if separate)
+    # Determine precision
     precision = "bf16" if cfg.training.get("bf16") else "fp16" if cfg.training.get("fp16") else "fp32"
-    if precision == "bf16": logger.info("Using bfloat16 precision."); model_kwargs["torch_dtype"] = torch.bfloat16
-    elif precision == "fp16": logger.info("Using float16 precision."); model_kwargs["torch_dtype"] = torch.float16
-    else: logger.info("Using default float32 precision.")
+    torch_dtype = torch.float32 # Default
+    if precision == "bf16":
+        torch_dtype = torch.bfloat16
+        print(f"Loading model {model_name} in bfloat16 precision.") # Use logger if configured
+    elif precision == "fp16":
+        torch_dtype = torch.float16
+        print(f"Loading model {model_name} in float16 precision.") # Use logger if configured
+    else:
+        print(f"Loading model {model_name} in float32 precision.") # Use logger if configured
 
-    model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
 
-    logger.info(f"Loading tokenizer for {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        token=access_token,
-        trust_remote_code=trust_remote_code,
-        padding_side="left", # Use left padding
-        use_fast=True,
-    )
+    model_kwargs = {
+        "trust_remote_code": trust_remote_code,
+        "token": access_token,
+        "torch_dtype": torch_dtype,
+    }
+    if attn_impl:
+        model_kwargs["attn_implementation"] = attn_impl
+        print(f"Using attention implementation: {attn_impl}") # Use logger if configured
 
-    # Set pad token if missing - essential for left padding
-    if tokenizer.pad_token is None:
-        logger.warning("Tokenizer does not have a pad token. Setting pad_token to eos_token.")
-        tokenizer.pad_token = tokenizer.eos_token
-        model.config.pad_token_id = tokenizer.pad_token_id
+    # Load Model
+    try:
+        model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+        print(f"Base model '{model_name}' loaded successfully.") # Use logger if configured
+    except Exception as e:
+        print(f"Error loading base model {model_name}: {e}") # Use logger if configured
+        raise # Re-raise the exception
 
-    logger.info("Base model and tokenizer loaded successfully.")
+    # Load Tokenizer
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            token=access_token,
+            trust_remote_code=trust_remote_code,
+            # Add padding side if needed, often depends on model/fine-tuning
+            # padding_side='left' # Or 'right' depending on model/task
+        )
+        print(f"Tokenizer for '{model_name}' loaded successfully.") # Use logger if configured
+
+        # Set pad token if missing
+        if tokenizer.pad_token is None:
+            if tokenizer.eos_token:
+                tokenizer.pad_token = tokenizer.eos_token
+                print("Tokenizer missing pad_token, setting to eos_token.") # Use logger if configured
+            else:
+                # Add a default pad token if EOS is also missing (less common)
+                tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+                model.resize_token_embeddings(len(tokenizer)) # Resize model embeddings if new token added
+                print("Tokenizer missing pad_token and eos_token. Added '[PAD]' as pad_token.") # Use logger if configured
+
+
+    except Exception as e:
+        print(f"Error loading tokenizer for {model_name}: {e}") # Use logger if configured
+        raise # Re-raise the exception
+
     return model, tokenizer
 
 # --- Prompt Formatting ---
-def format_prompt(example: Dict[str, Any], cfg: DictConfig) -> Dict[str, str]:
-    """Formats a single example using the templates from the config."""
-    # Ensure dataset section and keys exist
-    if not cfg.get("dataset") or not cfg.dataset.get("prompt_format") or not cfg.dataset.get("response_template"):
-         raise ValueError("Config missing dataset.prompt_format or dataset.response_template")
-    if 'question' not in example or 'answer' not in example:
-         raise ValueError("Input example missing 'question' or 'answer' field")
 
-    prompt = cfg.dataset.prompt_format.format(question=example['question'])
-    response = cfg.dataset.response_template.format(answer=example['answer'])
-    text = prompt + response # Used for training tokenization
-    return {"text": text, "prompt": prompt, "ground_truth_answer": example['answer']}
+def format_prompt(sample: Dict[str, Any], cfg: DictConfig) -> Dict[str, Any]:
+    """
+    Formats a data sample into a prompt string based on config.
+
+    Args:
+        sample: A dictionary representing a single data point (e.g., from dataset).
+        cfg: The configuration object, expected to have `cfg.dataset.prompt_format`.
+
+    Returns:
+        A dictionary containing at least 'prompt' and potentially 'ground_truth_answer'.
+        The exact structure depends on the prompt format.
+    """
+    prompt_format = cfg.dataset.get("prompt_format", "instruction") # Default format
+    formatted_sample = {}
+
+    # --- GSM8K Example Format ---
+    if cfg.dataset.name == "gsm8k":
+        question = sample.get("question", "")
+        answer = sample.get("answer", "") # Keep the ground truth if available
+
+        # Basic instruction format
+        prompt = f"Question: {question}\nAnswer:" # Model should generate the reasoning and final answer
+        formatted_sample["prompt"] = prompt
+        formatted_sample["ground_truth_answer"] = answer # Pass ground truth along
+
+    # --- Add other dataset format handlers here ---
+    # elif cfg.dataset.name == "alpaca":
+    #     instruction = sample.get("instruction", "")
+    #     input_text = sample.get("input", "")
+    #     if input_text:
+    #         prompt = f"Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.\n\n### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:"
+    #     else:
+    #         prompt = f"Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n### Instruction:\n{instruction}\n\n### Response:"
+    #     formatted_sample["prompt"] = prompt
+    #     formatted_sample["ground_truth_answer"] = sample.get("output", "")
+
+    # --- Default/Placeholder Format ---
+    else:
+        # Assume a simple instruction format if not specified
+        instruction = sample.get("instruction", sample.get("question", "")) # Try common keys
+        input_text = sample.get("input", "")
+        if input_text:
+             prompt = f"Instruction: {instruction}\nInput: {input_text}\nOutput:"
+        else:
+             prompt = f"Instruction: {instruction}\nOutput:"
+        formatted_sample["prompt"] = prompt
+        formatted_sample["ground_truth_answer"] = sample.get("output", sample.get("answer", ""))
+
+    if not formatted_sample.get("prompt"):
+         print(f"Warning: Could not format prompt for sample: {sample}") # Use logger if configured
+
+    return formatted_sample
+
 
 # --- Answer Extraction ---
-def extract_gsm8k_answer(completion: str) -> str | None:
-    """Extracts the final numerical answer from GSM8K generated text."""
-    if not isinstance(completion, str): return None # Handle non-string input
-    match = re.search(r"####\s*([\d.,]+)\s*$", completion)
+
+def extract_gsm8k_answer(completion: str) -> Optional[str]:
+    """Extracts the final numerical answer from a GSM8K completion string."""
+    # Regex to find the final answer marked with ####
+    match = re.search(r"####\s*([\d\.,]+)", completion)
     if match:
-        return match.group(1).replace(",", "")
-    # Optional: Add fallback logic if #### marker is missing?
-    # E.g., find last number in the string? More brittle.
-    # numbers = re.findall(r"[-+]?\d*\.\d+|\d+", completion)
-    # if numbers: return numbers[-1].replace(",", "")
-    return None
+        answer = match.group(1).strip().replace(',', '')
+        # Optional: Add validation if it's a number?
+        try:
+            float(answer) # Check if it can be converted to float
+            return answer
+        except ValueError:
+            return None # Return None if it's not a valid number despite matching pattern
+    else:
+        return None # Return None if the pattern is not found
+
+# --- JSON Lines Read/Write ---
+
+def read_jsonl(file_path: str) -> List[Dict[str, Any]]:
+    """Reads a JSON Lines file and returns a list of dictionaries."""
+    data = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                if line.strip(): # Ensure line is not empty
+                    try:
+                        data.append(json.loads(line))
+                    except json.JSONDecodeError as e:
+                        # Handle potential errors in specific lines if needed
+                        print(f"Warning: Skipping invalid JSON line {line_num} in {file_path}: {line.strip()} - Error: {e}") # Use logger if configured
+    except FileNotFoundError:
+        print(f"Error: Input file not found at {file_path}") # Use logger if configured
+        # Decide if you want to raise the error or return empty list
+        raise
+    except Exception as e:
+        print(f"Error reading file {file_path}: {e}") # Use logger if configured
+        raise
+    return data
+
+def write_jsonl(file_path: str, data: List[Dict[str, Any]]):
+    """Writes a list of dictionaries to a JSON Lines file."""
+    try:
+        # Ensure parent directory exists
+        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            for item in data:
+                try:
+                    f.write(json.dumps(item) + '\n')
+                except TypeError as e:
+                     print(f"Warning: Skipping item due to JSON serialization error: {item} - Error: {e}") # Use logger if configured
+    except IOError as e:
+         print(f"Error: Could not write to file {file_path} - Error: {e}") # Use logger if configured
+         # Decide if you want to raise the error
+         raise
+    except Exception as e:
+        print(f"An unexpected error occurred writing to {file_path}: {e}") # Use logger if configured
+        raise
+
+# --- Optional: Add other utility functions as needed ---
+# For example: WandB initialization, dataset preprocessing steps, etc.
