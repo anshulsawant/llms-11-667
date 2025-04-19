@@ -8,12 +8,18 @@ This project performs supervised fine-tuning (SFT) of a large language model usi
 your_project_root/
 ├── src/
 │   └── sft_project/       # Python package source code
-│       ├── init.py
+│       ├── __init__.py    # Marks directory as Python package
 │       ├── sft_script.py  # Main training and evaluation script (supports Full & LoRA)
 │       └── inference.py   # Script for running inference (supports Full & LoRA)
-├── config.yaml            # Configuration file for model, dataset, training, LoRA
+├── config.yaml            # Base configuration file
+├── config_full_main.yaml  # Example override config
+├── config_lora_main.yaml  # Example override config
+├── config_*.yaml          # Other override configs...
 ├── requirements.txt       # Python dependencies
 ├── setup.py               # Package setup script
+├── data/
+│   └── inference_input_sft.jsonl # Inference input file for the fine tuned mode.
+│       ├──inference_input_base.jsonl # Inference input file for the pre-trained model (one-shot).
 └── README.md              # This file
 ```
 
@@ -64,27 +70,31 @@ g. Hardware Requirements
 
   LoRA Fine-tuning: Significantly reduces VRAM requirements, making it feasible on GPUs with less memory (e.g., 24GB or 40GB might be sufficient, depending on config). Adjust batch sizes accordingly.
 
-## 2. Configuration (config.yaml)
-  The config.yaml file controls the fine-tuning process:
+## 2. Configuration (config.yaml + Overrides)
+Configuration is managed via YAML files using OmegaConf merging.
 
-  tuning_method: Set to "full" or "lora" to select the fine-tuning approach.
+`config.yaml`: Contains the base configuration (default model, dataset, training parameters, LoRA settings, evaluation settings, default inference settings).
 
-  model: Base model configuration.
+Override Configs (e.g., `config_full_main.yaml`): Smaller files specifying only the parameters that differ for a specific experiment run (like `tuning_method`, `dataset.config_name`, `training.output_dir`, `wandb.run_name`). These merge with `config.yaml`.
 
-  dataset: Dataset configuration.
+inference Section: The base `config.yaml` contains an inference section defining default parameters used by `inference.py`:
 
-  training: General training hyperparameters (batch size, learning rate, epochs, etc.). Note that optimal learning_rate and per_device_train_batch_size might differ between full and lora.
+`input_file`: Default path to the input data.
 
-  lora_config: Parameters for LoRA (rank r, lora_alpha, target_modules, etc.). Only used if tuning_method is "lora".
+`output_dir`: Default directory for saving inference results.
 
-  wandb: Weights & Biases configuration.
+`prompt_field`: Default field name for questions in the input file.
 
-  evaluation: Evaluation settings, including base model prompting strategy.
+`output_field`: Default field name for generations in the output file.
 
-  Review and modify this file to select your tuning method and set appropriate parameters.
+`precision`, `batch_size`, `max_new_tokens`, `temperature`, `do_sample`: Default generation parameters.
+
+Note: These values in the inference section can also be overridden in your specific run config files (e.g., `config_full_main.yaml`) if needed for a particular model.
+
+Review `config.yaml` for base settings and create/modify override files for specific runs.
 
 ## 3. Running Training and Evaluation
-  The sft_script.py handles training and evaluation for both Full SFT and LoRA SFT, based on the tuning_method set in config.yaml.
+  The `sft_script.py` handles training and evaluation for both Full SFT and LoRA SFT, based on the tuning_method set in `config.yaml`.
 
 a. Configure Accelerate (One-time Setup)
   If you haven't configured accelerate for your machine before, run the following command and answer the questions about your setup (e.g., number of GPUs, mixed precision):
@@ -108,80 +118,48 @@ It evaluates the base model first, then trains (either fully or just adapters), 
 ## 4. Finding Training Results
   Logs: Console output and WandB dashboard provide detailed metrics.
 
-Checkpoints & Final Model/Adapter: Saved in training.output_dir (inside subdirectories like final_checkpoint_full or final_checkpoint_lora).
+Checkpoints & Final Model/Adapter: Saved in `training.output_dir` (inside subdirectories like `final_checkpoint_full` or `final_checkpoint_lora`).
 
 Full SFT: Saves the entire fine-tuned model checkpoint.
 
-LoRA SFT: Saves only the trained adapter weights and configuration (adapter_model.safetensors, adapter_config.json) inside the checkpoint directory. The base model is not saved again.
+LoRA SFT: Saves only the trained adapter weights and configuration (`adapter_model.safetensors`, `adapter_config.json`) inside the checkpoint directory. The base model is not saved again.
 
-Metrics: Saved in training.output_dir and logged to WandB.
+Metrics: Saved in `training.output_dir` and logged to WandB.
 
 ## 5. Running Inference with Models
-  Use the inference.py script, which now supports loading both full models and LoRA adapters.
+Use the inference.py script, now primarily driven by configuration files.
 
 a. Prepare Input File
-  Create a .jsonl file (e.g., input_prompts.jsonl) with prompts:
-```json
+Ensure the input .jsonl file path matches the inference.input_file setting in your merged configuration.
+
+### Example content for data/inference_input.jsonl
 {"id": 1, "question": "What is the capital of France?"}
 {"id": 2, "question": "Solve for x: 2x + 5 = 15"}
-```
+
 b. Run the Inference Script
+Provide the path to the override config file that corresponds to the trained model you want to use. The script infers the model path, input/output files, and generation parameters from the merged config.
 
-  Example: Inference with a fully fine-tuned model:
-
+### Example: Inference with model trained using config_full_main.yaml
+(Script reads input/output paths and params from merged config)
 ```bash
-python src/sft_project/inference.py \
-    --model_name_or_path ./sft_results/final_checkpoint_full/ \
-    --input_file input_prompts.jsonl \
-    --precision bf16 \
-    --batch_size 4 \
-    --max_new_tokens 256 \
-    --temperature 0.1 \
-    # Other args...
+python src/sft_project/inference.py --config_path config_full_main.yaml
 ```
-Example: Inference with a LoRA fine-tuned model:
+### Example: Inference with model trained using config_lora_main.yaml
 ```bash
-python src/sft_project/inference.py \
-    --model_name_or_path google/gemma-2-9b-it \ # Provide BASE model name/path
-    --adapter_path ./sft_results/final_checkpoint_lora/ \ # Provide path to LoRA adapters
-    --input_file input_prompts.jsonl \
-    --precision bf16 \
-    --batch_size 4 \
-    --max_new_tokens 256 \
-    --temperature 0.1 \
-    # Other args...
+python src/sft_project/inference.py --config_path config_lora_main.yaml
 ```
-Key Inference Arguments:
+### Specify a different base config if needed:
+```bash
+python src/sft_project/inference.py --config_path <override.yaml> --base_config_path <base.yaml>
+```
 
---model_name_or_path: (Required) Path/name of the base model (for LoRA) or the full SFT checkpoint path (for full SFT).
+Command-Line Arguments:
 
---adapter_path: (Optional) Path to trained LoRA adapters. Only use when loading a LoRA model.
+`--config_path`: (Required) Path to the override config file for the desired model/run.
 
---input_file: (Required) Path to your .jsonl input file.
+`--base_config_path`: (Optional) Path to base config (default: `config.yaml`).
 
---prompt_field: Field in JSONL containing the question (default: question).
-
---output_field: Field name for the generated output (default: generation).
-
---precision: Model precision (bf16, fp16, fp32). Default: bf16.
-
---batch_size: Inference batch size. Adjust based on GPU memory.
-
---max_new_tokens: Max tokens to generate.
-
---temperature: Generation temperature.
-
---do_sample: Use sampling.
-
---hf_token: Optional HF token.
-
---force_cpu: Run on CPU if needed.
+Note: Most other parameters (input/output files, generation settings) are now controlled via the inference section in the configuration files.
 
 c. Find Inference Results
-The script overwrites the --input_file with results, adding the generation field. Make backups if needed.
-
-Example input_prompts.jsonl after running inference:
-```json
-{"id": 1, "question": "What is the capital of France?", "generation": " The capital of France is Paris."}
-{"id": 2, "question": "Solve for x: 2x + 5 = 15", "generation": " 2x = 15 - 5\n2x = 10\nx = 10 / 2\nx = 5\n#### 5"}
-```
+The script saves results to a new file named like `[input_file_stem]__[config_file_stem]__generations.jsonl`.
