@@ -52,7 +52,7 @@
 * **Point:** Runs using the Socratic dataset achieved lower final training loss compared to Main dataset runs for both Full SFT and LoRA.
 * **Evidence:** Bar chart comparison of final loss values.
    ![](final_loss_comparison.png)
-* Socratic dataset leads to lower loss but poorer end task performance.
+* Socratic dataset leads to lower loss but poorer end task performance. Possibly because of simpler language but longer reasoning chains.
 
 ---
 
@@ -98,5 +98,6 @@
     * Fine-tuning `gemma-2b-it` substantially improves GSM8K performance.
     * Full SFT yielded the best accuracy (31% on Main).
     * LoRA offered higher throughput but lower accuracy in this setup.
-    * Training dataset choice critically impacts generalization (Main > Socratic here).
+    * Training dataset choice critically impacts end task performance (Main > Socratic here).
+	  * Socratic likely has simpler shorter sentences, but longer answers overall.
     * Training loss alone is not a sufficient indicator of evaluation success.
