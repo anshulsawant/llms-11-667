@@ -72,7 +72,7 @@ evaluation: # Settings used by evaluate_gsm8k in sft_script.py
 # --- Updated inference section ---
 inference:
   # --- Add paths and fields here ---
-  input_file: "data/inference_input.jsonl" # Default input file path
+  input_file: "data/inference_input_oneshot.jsonl" # Default input file path
   output_dir: "./inference_outputs"      # Default output directory
   prompt_field: "question"                # Default input field name
   output_field: "generation"              # Default output field name
