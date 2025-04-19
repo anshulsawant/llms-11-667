@@ -16,7 +16,7 @@ from tqdm.auto import tqdm
 try:
     from .sft_script import load_config
 except ImportError:
-    logger.error("Failed to import 'load_config' from sft_script.")
+    logger.error("Failed to import 'load_config' from sft_script. Make sure scripts are in the same package or run as part of the installed module.")
     raise
 
 # Configure logging
@@ -31,12 +31,15 @@ logger = logging.getLogger(__name__)
 PROMPT_FORMAT = "Question: {question}\nAnswer: "
 
 
-# --- Simplified parse_arguments ---
+# --- load_config function (imported or copied) remains here ---
+# (Assuming load_config is available via import as per previous step)
+
+
 def parse_arguments():
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(description="Run inference using a configuration file.")
 
-    # --- Only essential arguments remain ---
+    # --- Essential Arguments ---
     parser.add_argument(
         "--config_path", type=str, required=True,
         help="Path to the specific override configuration YAML file (e.g., config_full_main.yaml)."
@@ -45,15 +48,20 @@ def parse_arguments():
         "--base_config_path", type=str, default="config.yaml",
         help="Path to the base configuration YAML file."
     )
-    # --- Removed: --input_file, --output_dir, --prompt_field, --output_field ---
-    # --- Removed: --precision, --batch_size, --max_new_tokens, --temperature, --do_sample, --hf_token ---
-    # --- Removed: --force_cpu ---
+    # --- New flag to force using the base model ---
+    parser.add_argument(
+        "--use_base_model", action="store_true",
+        help="Force inference using the base model specified in the config, ignoring any fine-tuning checkpoints or adapters."
+    )
+    # --- Arguments now read from config ---
+    # input_file, output_dir, prompt_field, output_field
+
+    # --- Removed Optional Overrides ---
 
     args = parser.parse_args()
     return args
-# --- End simplified parse_arguments ---
 
-# --- Updated load_model_tokenizer (removed force_cpu) ---
+# --- load_model_tokenizer remains the same ---
 def load_model_tokenizer(
     model_name_or_path: str,
     precision: str,
@@ -86,6 +94,7 @@ def load_model_tokenizer(
             trust_remote_code=trust_remote_code
         )
         tokenizer_load_path = model_name_or_path
+        # For LoRA, tokenizer should still come from base model path
         if adapter_path: logger.info(f"Loading tokenizer from base model path: {model_name_or_path}")
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_load_path, token=hf_token, padding_side="right")
 
@@ -108,7 +117,6 @@ def load_model_tokenizer(
     except Exception as e:
         logger.error(f"Failed to load model or tokenizer: {e}", exc_info=True)
         raise
-# --- End updated load_model_tokenizer ---
 
 
 def read_jsonl(file_path: Path) -> List[Dict[str, Any]]:
@@ -127,7 +135,6 @@ def read_jsonl(file_path: Path) -> List[Dict[str, Any]]:
 def write_jsonl(file_path: Path, data: List[Dict[str, Any]]):
     # (Implementation remains the same)
     try:
-        # Ensure parent directory exists
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with file_path.open('w', encoding='utf-8') as f:
             for item in data: f.write(json.dumps(item) + '\n')
@@ -191,64 +198,69 @@ def main():
         logger.info(f"Successfully loaded config from: {args.config_path} (overriding {args.base_config_path})")
     except Exception as e: logger.error(f"Failed to load configuration: {e}", exc_info=True); sys.exit(1)
 
-    # --- Get parameters ONLY from config ---
-    inference_cfg = cfg.get("inference")
-    if not inference_cfg:
-        logger.error("Configuration file missing required 'inference' section.")
-        sys.exit(1)
+    # --- Determine Model/Adapter Paths based on config and --use_base_model flag ---
+    model_load_path: str; adapter_load_path: Optional[str] = None
+    model_identifier_for_output: str # For naming the output file
 
-    # Get required paths and fields from config
+    if args.use_base_model:
+        model_load_path = cfg.model.name
+        adapter_load_path = None
+        model_identifier_for_output = f"{Path(cfg.model.name).name.replace('/','_')}__base"
+        logger.info(f"Using BASE model specified in config: '{model_load_path}'")
+    else:
+        # Infer paths from training output defined in the config
+        tuning_method = cfg.get("tuning_method", "full")
+        output_dir_from_config = Path(cfg.training.output_dir)
+        expected_checkpoint_dir = output_dir_from_config / "final_checkpoint"
+        # Use the config file stem as the identifier for fine-tuned models
+        model_identifier_for_output = Path(args.config_path).stem
+
+        if tuning_method == "lora":
+            model_load_path = cfg.model.name # Base model path
+            adapter_load_path = str(expected_checkpoint_dir) # Adapter path
+            logger.info(f"Inferred LoRA setup: Base='{model_load_path}', Adapter='{adapter_load_path}'")
+            if not os.path.isdir(adapter_load_path): logger.warning(f"LoRA adapter path does not exist: {adapter_load_path}")
+        elif tuning_method == "full":
+            model_load_path = str(expected_checkpoint_dir) # Full SFT checkpoint path
+            adapter_load_path = None
+            logger.info(f"Inferred Full SFT setup: Model='{model_load_path}'")
+            if not os.path.isdir(model_load_path): logger.error(f"Full SFT checkpoint path does not exist: {model_load_path}"); sys.exit(1)
+        else: logger.error(f"Unknown tuning_method '{tuning_method}'."); sys.exit(1)
+    # --- End Path Inference ---
+
+    # --- Get parameters ONLY from config's 'inference' section ---
+    inference_cfg = cfg.get("inference")
+    if not inference_cfg: logger.error("Config missing required 'inference' section."); sys.exit(1)
+
+    # Required inference params from config
     input_file_str = inference_cfg.get("input_file")
-    output_dir_str = inference_cfg.get("output_dir", ".") # Default to current dir if missing
+    output_dir_str = inference_cfg.get("output_dir", ".")
     prompt_field = inference_cfg.get("prompt_field", "question")
     output_field = inference_cfg.get("output_field", "generation")
-
-    if not input_file_str:
-        logger.error("Missing 'inference.input_file' in configuration.")
-        sys.exit(1)
-
+    if not input_file_str: logger.error("Missing 'inference.input_file' in configuration."); sys.exit(1)
     input_file = Path(input_file_str)
     output_dir = Path(output_dir_str)
-    os.makedirs(output_dir, exist_ok=True) # Ensure output dir exists
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Get other inference parameters from config, using defaults if necessary
+    # Other inference params from config (with defaults)
     precision = inference_cfg.get("precision", "bf16")
     batch_size = inference_cfg.get("batch_size", 4)
     max_new_tokens = inference_cfg.get("max_new_tokens", 256)
     temperature = inference_cfg.get("temperature", 0.1)
     do_sample = inference_cfg.get("do_sample", True)
-    hf_token = cfg.model.get("access_token", None)
+    hf_token = cfg.model.get("access_token", None) # Get token from model config
     trust_remote_code = cfg.model.get("trust_remote_code", False)
 
     logger.info(f"Using parameters from config: input='{input_file}', output_dir='{output_dir}', prompt='{prompt_field}', output='{output_field}'")
     logger.info(f"Generation params: precision={precision}, batch_size={batch_size}, max_new_tokens={max_new_tokens}, temperature={temperature}, do_sample={do_sample}")
     # --- End Parameter Determination ---
 
-
-    # Determine Model and Adapter Paths from Config
-    model_load_path: str; adapter_load_path: Optional[str] = None
-    tuning_method = cfg.get("tuning_method", "full")
-    output_dir_from_config = Path(cfg.training.output_dir)
-    expected_checkpoint_dir = output_dir_from_config / "final_checkpoint"
-    if tuning_method == "lora":
-        model_load_path = cfg.model.name
-        adapter_load_path = str(expected_checkpoint_dir)
-        logger.info(f"Inferred LoRA setup: Base='{model_load_path}', Adapter='{adapter_load_path}'")
-        if not os.path.isdir(adapter_load_path): logger.warning(f"LoRA adapter path does not exist: {adapter_load_path}")
-    elif tuning_method == "full":
-        model_load_path = str(expected_checkpoint_dir)
-        logger.info(f"Inferred Full SFT setup: Model='{model_load_path}'")
-        if not os.path.isdir(model_load_path): logger.error(f"Full SFT checkpoint path does not exist: {model_load_path}"); sys.exit(1)
-    else: logger.error(f"Unknown tuning_method '{tuning_method}'."); sys.exit(1)
-
-
     if not input_file.is_file(): logger.error(f"Input file not found: {input_file}"); sys.exit(1)
 
     try:
-        # Pass config-derived parameters and remove force_cpu arg
+        # Pass config-derived parameters, force_cpu removed
         model, tokenizer = load_model_tokenizer(
             model_load_path, precision, hf_token,
-            False, # force_cpu is removed
             trust_remote_code, adapter_load_path
         )
     except Exception: logger.error("Exiting due to model loading failure."); sys.exit(1)
@@ -264,15 +276,17 @@ def main():
         )
     except Exception as e: logger.error(f"Inference error: {e}", exc_info=True); sys.exit(1)
 
-    # Generate output filename
+    # --- Generate output filename using appropriate identifier ---
     input_filename_stem = input_file.stem
-    config_filename_stem = Path(args.config_path).stem
-    output_filename = f"{input_filename_stem}__{config_filename_stem}__generations.jsonl"
-    output_path = output_dir / output_filename # Use output_dir from config
+    # model_identifier_for_output determined earlier based on --use_base_model flag
+    output_filename = f"{input_filename_stem}__{model_identifier_for_output}__generations.jsonl"
+    output_path = output_dir / output_filename
+    # --- End filename generation ---
 
-    # Write results
+    # --- Write results to the NEW file ---
     try: write_jsonl(output_path, output_data)
     except Exception: logger.error("Exiting due to output file writing failure."); sys.exit(1)
+    # --- End writing results ---
 
     logger.info("Inference script finished successfully.")
 
