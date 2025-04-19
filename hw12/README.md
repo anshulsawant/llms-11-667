@@ -118,7 +118,7 @@ accelerate launch src/sft_project/evaluate.py --config_path config_full_main.yam
 
 * Evaluation metrics (JSON file) are saved automatically to the `./eval_results/` directory. The filename includes details from the config, model type, and dataset.
 * When evaluating the base model, zero or one-shot prompt with explicit instructions is used.
-**Key Command-Line Arguments:**
+## Key Command-Line Arguments:
 
 * `--config_path`: (Required) Path to the override config file defining the model and evaluation settings.
 
