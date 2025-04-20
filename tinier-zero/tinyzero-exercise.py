@@ -1,7 +1,3 @@
-# -*- coding: utf-8 -*-
-# === Recommended Order for Implementing PPO Exercises & The Big Picture ===
-#
-
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW # Use AdamW for LLMs
@@ -528,57 +524,58 @@ def perform_ppo_update(actor_model, optimizer, rollout_buffer, config):
 
 # --- 7. Main Training Loop ---
 # (Keep main loop intact)
-optimizer = AdamW(actor_model.parameters(), lr=config["learning_rate"])
-dataloader = torch.utils.data.DataLoader(tokenized_dataset, batch_size=config["batch_size"], shuffle=True, collate_fn=collate_fn)
-
-print("--- Starting PPO Training (Exercise Mode) ---")
-for ppo_step in range(config["total_ppo_steps"]):
-    print(f"\nPPO Step {ppo_step + 1}/{config['total_ppo_steps']}")
-
-    # --- Rollout Phase ---
-    print("Phase 1: Generating Rollouts...")
+if __name__ == "main":
+    optimizer = AdamW(actor_model.parameters(), lr=config["learning_rate"])
     dataloader = torch.utils.data.DataLoader(tokenized_dataset, batch_size=config["batch_size"], shuffle=True, collate_fn=collate_fn)
-    rollout_buffer = perform_rollouts(actor_model, ref_model, tokenizer, dataloader, generation_config)
 
-    # Basic Rollout Stats
-    avg_reward = 0.0
-    if rollout_buffer and "rewards" in rollout_buffer and rollout_buffer["rewards"].numel() > 0 :
-         avg_reward = rollout_buffer["rewards"].mean().item()
-         print(f"Rollout complete. Average reward: {avg_reward:.4f}")
-         # (Sample generation printing kept for inspection)
-         # ...
-    else:
-         print("Rollout buffer seems empty or invalid after generation.")
+    print("--- Starting PPO Training (Exercise Mode) ---")
+    for ppo_step in range(config["total_ppo_steps"]):
+        print(f"\nPPO Step {ppo_step + 1}/{config['total_ppo_steps']}")
 
-    # --- Update Phase ---
-    print("Phase 2: Performing PPO Updates...")
-    is_buffer_valid = (
-        rollout_buffer and
-        "prompt_input_ids" in rollout_buffer and rollout_buffer["prompt_input_ids"].numel() > 0 and
-        "response_input_ids" in rollout_buffer and rollout_buffer["response_input_ids"].shape[1] > 1
-    )
-    if is_buffer_valid:
-         metrics = perform_ppo_update(actor_model, optimizer, rollout_buffer, config)
-         if metrics and (ppo_step + 1) % config["log_interval"] == 0:
-             print(f"PPO Step {ppo_step+1} Metrics (from update):")
-             log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-             print(log_str)
-             print(f"  Reward (mean from rollout): {avg_reward:.4f}")
-         elif not metrics: print("Update function returned empty metrics.")
-    else: print("Skipping update step because rollout buffer is invalid.")
+        # --- Rollout Phase ---
+        print("Phase 1: Generating Rollouts...")
+        dataloader = torch.utils.data.DataLoader(tokenized_dataset, batch_size=config["batch_size"], shuffle=True, collate_fn=collate_fn)
+        rollout_buffer = perform_rollouts(actor_model, ref_model, tokenizer, dataloader, generation_config)
 
-    # --- Save Model Checkpoint ---
-    if (ppo_step + 1) % config["save_interval"] == 0:
-        print(f"Saving model checkpoint at step {ppo_step + 1}...")
-        output_path = f"{config['output_dir']}/step_{ppo_step + 1}"
-        try:
-            actor_model.save_pretrained(output_path)
-            tokenizer.save_pretrained(output_path)
-            print(f"Model saved to {output_path}")
-        except Exception as e: print(f"Error saving model: {e}")
+        # Basic Rollout Stats
+        avg_reward = 0.0
+        if rollout_buffer and "rewards" in rollout_buffer and rollout_buffer["rewards"].numel() > 0 :
+            avg_reward = rollout_buffer["rewards"].mean().item()
+            print(f"Rollout complete. Average reward: {avg_reward:.4f}")
+            # (Sample generation printing kept for inspection)
+            # ...
+        else:
+            print("Rollout buffer seems empty or invalid after generation.")
 
-print("--- PPO Training Finished ---")
+        # --- Update Phase ---
+        print("Phase 2: Performing PPO Updates...")
+        is_buffer_valid = (
+            rollout_buffer and
+            "prompt_input_ids" in rollout_buffer and rollout_buffer["prompt_input_ids"].numel() > 0 and
+            "response_input_ids" in rollout_buffer and rollout_buffer["response_input_ids"].shape[1] > 1
+        )
+        if is_buffer_valid:
+            metrics = perform_ppo_update(actor_model, optimizer, rollout_buffer, config)
+            if metrics and (ppo_step + 1) % config["log_interval"] == 0:
+                print(f"PPO Step {ppo_step+1} Metrics (from update):")
+                log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+                print(log_str)
+                print(f"  Reward (mean from rollout): {avg_reward:.4f}")
+            elif not metrics: print("Update function returned empty metrics.")
+        else: print("Skipping update step because rollout buffer is invalid.")
 
-# --- Final Model Saving ---
-# (Keep final saving and inference logic intact)
-# ...
+        # --- Save Model Checkpoint ---
+        if (ppo_step + 1) % config["save_interval"] == 0:
+            print(f"Saving model checkpoint at step {ppo_step + 1}...")
+            output_path = f"{config['output_dir']}/step_{ppo_step + 1}"
+            try:
+                actor_model.save_pretrained(output_path)
+                tokenizer.save_pretrained(output_path)
+                print(f"Model saved to {output_path}")
+            except Exception as e: print(f"Error saving model: {e}")
+
+    print("--- PPO Training Finished ---")
+
+    # --- Final Model Saving ---
+    # (Keep final saving and inference logic intact)
+    # ...
