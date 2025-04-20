@@ -87,18 +87,16 @@ tinier-zero/
 
 2.  **Clone the Repository (If Applicable):**
     ```bash
-    git clone <repository-url>
-    cd ppo_rl_tutorial
+    git clone https://github.com/anshulsawant/llms-11-667.git
+    cd tinier-zero
     ```
 
 3.  **Create Virtual Environment (Recommended):**
     ```bash
-    python -m venv venv
+    python -m venv trz
     # Activate the environment
     # Linux/macOS:
-    source venv/bin/activate
-    # Windows:
-    # .\venv\Scripts\activate
+    source trz/bin/activate
     ```
 
 4.  **Install Dependencies:**
@@ -113,7 +111,10 @@ tinier-zero/
         pip install -e .[dev]
         ```
         *(Note: If you don't need `bitsandbytes` for 8-bit Adam, you can remove it from `requirements.txt` before installing).*
-
+5. Login to wandb
+   ```bash
+   wandb login
+   ```
 ## Configuration
 
 * Configuration files are located in the `configs/` directory and use YAML format. They are parsed using OmegaConf.
