@@ -12,39 +12,40 @@ This repository includes:
 
 ## The Big Picture: How PPO RLHF Works Here
 
-The PPO algorithm iterates through a cycle of experience gathering and policy improvement:
+The PPO algorithm iterates through a cycle of experience gathering and policy improvement using several components:
 
 **A. Rollout Phase (`perform_rollouts`):**
-   - The current Actor model generates responses (trajectories) based on input prompts from the dataset (GSM8K questions).
+   - The current **Actor** model (the LLM being trained, e.g., Qwen 1.8B) generates responses (sequences of tokens) based on input prompts. Generating a token is the Actor's "action".
+   - The probability distribution over the next possible token output by the LLM's language model head represents the **policy**.
    - During generation, we store crucial data:
-     - Input prompts and generated responses.
-     - `logprobs` of the generated tokens under the Actor policy (needed for importance sampling ratio).
-     - `values` estimated by the Critic for each state/token (needed for GAE).
-     - `ref_logprobs` of generated tokens under the frozen Reference policy (needed for KL penalty).
-     - `rewards` obtained from the environment (1.0 for a correct GSM8K answer, 0 otherwise).
+     - Input prompts and generated response tokens.
+     - `logprobs`: Log probabilities of the generated tokens under the current Actor policy.
+     - `values`: The predicted "value" (expected future reward) for each token state, estimated by the **Critic** (the value head attached to the base LLM, taking hidden states as input).
+     - `ref_logprobs`: Log probabilities of the generated tokens under the frozen **Reference** policy (an identical, frozen copy of the initial Actor model).
+     - `rewards`: The final score (e.g., 1.0 for correct GSM8K answer) for the complete generated sequence.
 
 **B. Advantage Calculation Phase (within `perform_ppo_update`):**
-   - The collected rollout data (`rewards`, `values`, `logprobs`, `ref_logprobs`) is processed.
-   - First, KL penalties (`logprobs - ref_logprobs`) are calculated to measure deviation from the reference model.
-   - Then, `compute_gae_advantages` uses the task rewards, KL penalties, and critic values to estimate:
-     - `advantages`: How much better were the generated actions than expected by the critic? (Incorporates KL penalty). This guides the policy update.
-     - `returns`: What was the actual observed discounted reward-to-go? (Target for the Critic update).
+   - The collected rollout data is processed.
+   - KL penalties (`logprobs - ref_logprobs`) are calculated to measure how much the Actor's policy has diverged from the Reference policy.
+   - `compute_gae_advantages` uses the task rewards, KL penalties, and the Critic's `values` (`V(s)`) to estimate:
+     - `advantages` (`A(s,a)`): How much better or worse were the generated tokens (actions) than what the Critic expected for those states? This signal incorporates both the task reward and the KL penalty.
+     - `returns`: What was the actual observed discounted reward-to-go? This serves as the learning target for the Critic (value head).
 
 **C. Update Phase (`perform_ppo_update`):**
    - This phase uses the rollout data and the calculated advantages/returns to update the Actor and Critic models.
-   - It loops for multiple `ppo_epochs` over the *same* batch of rollout data to improve sample efficiency.
+   - It loops for multiple `ppo_epochs` over the *same* batch of rollout data (improving sample efficiency).
    - Within each epoch, it iterates over mini-batches:
-     - It re-evaluates the generated sequences with the *current* Actor/Critic to get `logprobs_new` and `values_new`.
-     - It calculates the three core PPO losses:
-       - `compute_policy_loss` uses the ratio of new/old probabilities and advantages to calculate the clipped surrogate objective, guiding the policy towards better actions while limiting update size.
-       - `compute_value_loss` uses the difference between predicted values (`values_new`) and target returns (`returns`) to improve the critic's predictions.
-       - `compute_entropy_loss` encourages exploration by penalizing overly deterministic policies.
-     - These losses are combined into a single objective value.
-     - Standard backpropagation and an optimizer step (`optimizer.step()`) update the Actor and Critic model weights based on this combined loss.
+     - It re-evaluates the generated sequences with the *current* Actor model to get `logprobs_new` (from LM head) and `values_new` (from value head).
+     - It calculates the PPO losses:
+       - `compute_policy_loss`: Uses the ratio of new/old probabilities and advantages to update the parameters of the **Actor** (the base LLM and its LM head), encouraging actions with positive advantages while clipping updates to maintain stability.
+       - `compute_value_loss`: Uses the difference between the Critic's new predictions (`values_new`) and the calculated target `returns` to update the **Critic** (the value head and potentially shared base LLM layers) to become a better predictor of future rewards.
+       - `compute_entropy_loss`: Encourages exploration by slightly penalizing the **Actor** for being too certain about its next token prediction.
+     - These losses are combined.
+     - Gradient descent (`optimizer.step()`) updates the trainable parameters (Actor base + LM head, Value head) based on the combined loss.
 
 **D. Repeat:**
-   - The entire cycle (Rollout -> GAE -> Update) repeats (`total_ppo_steps` times), using the newly updated Actor policy to generate the next batch of rollouts, gradually improving performance on the target task (solving GSM8K problems).
-
+   - The entire cycle (Rollout -> GAE -> Update) repeats, using the newly updated Actor model (LLM) to generate the next batch of rollouts, gradually improving its ability to generate high-reward sequences (correct GSM8K answers) while adhering to the KL constraint.
+   
 ## Exercise Order
 
 The file `src/ppo_trainer.py` contains the full script structure, but the core PPO algorithm logic is left blank for you to implement as an exercise. The file `src/ppo_trainer_solutions.py` contains the complete implementation for reference.
