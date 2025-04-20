@@ -1,0 +1,17 @@
+# requirements.txt
+torch>=2.0.0
+transformers>=4.36.0
+datasets>=2.14.0
+accelerate>=0.25.0
+trl>=0.7.0 # Includes AutoModelForCausalLMWithValueHead
+tqdm
+pytest>=7.0.0 # For running tests
+omegaconf>=2.3.0 # For config parsing
+wandb
+# Optional dependencies (install if needed, e.g., for 4-bit)
+bitsandbytes # Required if model.load_in_4bit=true on GPU
+# Tokenizer/model specific dependencies (often needed)
+scipy
+sentencepiece
+protobuf
+# Add other specific dependencies if your reward logic or models require them

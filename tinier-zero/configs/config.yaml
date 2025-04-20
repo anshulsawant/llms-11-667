@@ -1,0 +1,55 @@
+# configs/config.yaml
+# Model & Tokenizer Configuration
+model:
+  name: "Qwen/Qwen1.5-1.8B-Chat"
+  tokenizer_name: "Qwen/Qwen1.5-1.8B-Chat"
+  trust_remote_code: true # Needed for Qwen
+  torch_dtype: "bfloat32"
+
+# Dataset & Task Configuration
+dataset:
+  name: "gsm8k"
+  split: "train" # Use train split for prompts
+  prompt_format: "Question: {question}\nAnswer:" # How to format the prompt
+  max_prompt_length: 512 # Max tokens for prompt
+  max_gen_length: 256  # Max tokens to generate for answer
+
+# PPO Hyperparameters
+ppo:
+  learning_rate: 1.0e-6
+  epochs: 4         # Optimization epochs per rollout phase
+  batch_size: 8     # Rollout batch size (adjust based on VRAM)
+  mini_batch_size: 2 # Update mini-batch size (adjust based on VRAM)
+  gradient_accumulation_steps: 4 # Effective update batch size = mini_batch_size * grad_acc_steps
+  kl_coeff: 0.1     # KL penalty coefficient (beta)
+  clip_ratio: 0.2   # PPO policy objective clipping
+  clip_range_value: 0.2 # PPO value function clipping
+  vf_coeff: 0.1     # Value function loss weight
+  entropy_coeff: 0.01 # Entropy bonus weight
+  gamma: 1.0        # Discount factor
+  lam: 0.95         # GAE lambda
+  use_8bit_adam: true
+
+# Training Control
+training:
+  total_ppo_steps: 100 # Number of PPO steps (Rollout -> Update)
+  seed: 42
+  log_interval: 1   # Log metrics every N PPO steps
+  save_interval: 10 # Save model every N PPO steps
+  output_dir: "outputs/ppo_gsm8k_${model.name Sanitize model name}" # Use model name in output
+  device: "cuda"    # Set to "cpu" for CPU execution (use with debug config)
+
+# Generation settings for rollouts
+generation:
+  max_new_tokens: ${dataset.max_gen_length} # Reference value from dataset section
+  min_new_tokens: 5
+  temperature: 0.7
+  top_k: 50
+  top_p: 0.95
+  do_sample: true
+
+wandb:
+  report_to_wandb: true
+  project: "tinier-zero"
+  name: "tinier-zero-ppo-training"
+  
