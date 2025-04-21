@@ -63,7 +63,8 @@ wandb:
   log_model: "checkpoint"
 
 evaluation: # Settings used by evaluate.py (and fallback for inference.py)
-  max_new_tokens: 256
+  max_new_tokens: 512
+  batch_size: 8
   temperature: 0.1
   do_sample: true
   base_model_prompt_strategy: "one_shot" # Strategy for base model prompting
@@ -82,7 +83,7 @@ inference:
   # --- End added paths/fields ---
   precision: "bf16"
   batch_size: 4
-  max_new_tokens: 256
+  max_new_tokens: 512
   temperature: 0.1
   do_sample: true
   # --- Base model settings for inference ---
