@@ -190,7 +190,7 @@ def run_evaluation(
     tokenized_eval_dataset = eval_dataset.map(
         preprocess_function,
         batched=True,
-        remove_columns=columns_to_remove # Remove all prior columns
+        remove_columns=columns_to_remove + ['ground_truth_answers'] # Remove all prior columns
     )
     # --- End FIX ---
     logger.info(f"Tokenization complete. Final columns: {tokenized_eval_dataset.column_names}")
