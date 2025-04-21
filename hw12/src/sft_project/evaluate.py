@@ -56,7 +56,6 @@ def parse_arguments():
     parser.add_argument("--config_path", type=str, required=True, help="Path to the override configuration YAML file.")
     parser.add_argument("--base_config_path", type=str, default="configs/config.yaml", help="Path to the base configuration YAML file.")
     parser.add_argument("--use_base_model", action="store_true", help="Force evaluation using the base model specified in the config, ignoring checkpoints.")
-    # Removed unused CLI overrides for dataset params - use config file's `dataset` section
     return parser.parse_args()
 
 # slugify function remains the same as before
@@ -110,7 +109,6 @@ def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dat
         original_columns = selected_eval_dataset.column_names
         formatted_eval_dataset = selected_eval_dataset.map(
             lambda x: format_prompt(x, cfg),
-            # Keep original columns temporarily if needed by format_prompt, will remove later
         )
         if "prompt" not in formatted_eval_dataset.column_names or \
            "ground_truth_answer" not in formatted_eval_dataset.column_names:
@@ -122,6 +120,7 @@ def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dat
         raise
 
     logger.info(f"Evaluation dataset prepared for tokenization. Size: {len(formatted_eval_dataset)}")
+    # Returns dataset with 'prompt', 'ground_truth_answer', and potentially original columns
     return formatted_eval_dataset
 
 
@@ -129,7 +128,7 @@ def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dat
 def run_evaluation(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
-    eval_dataset: Dataset, # Dataset now has 'prompt' and 'ground_truth_answer' + maybe originals
+    eval_dataset: Dataset, # Dataset has 'prompt', 'ground_truth_answer' + maybe originals
     cfg: DictConfig,
     accelerator: Accelerator,
     is_base_model_eval: bool = False
@@ -178,23 +177,24 @@ def run_evaluation(
             padding=False, # Collator handles padding
             truncation=True
         )
-        # --- FIX: Explicitly include ground_truth_answer in the output ---
-        # This ensures it's available after the map removes other columns.
-        model_inputs["ground_truth_answer"] = examples["ground_truth_answer"]
+        # --- FIX: DO NOT return ground_truth_answer here ---
+        # Only return columns the collator needs (input_ids, attention_mask)
+        # model_inputs["ground_truth_answer"] = examples["ground_truth_answer"] # Removed
         # --- End FIX ---
         return model_inputs
 
     logger.info("Preprocessing and tokenizing evaluation dataset...")
-    # --- FIX: Remove all columns that existed *before* this map step ---
-    columns_to_remove = eval_dataset.column_names
+    # Keep track of ground truths separately BEFORE removing columns
+    ground_truths_all = eval_dataset["ground_truth_answer"]
+    columns_to_remove = eval_dataset.column_names # Get all columns before map
+    # Apply tokenization
     tokenized_eval_dataset = eval_dataset.map(
         preprocess_function,
         batched=True,
-        remove_columns=columns_to_remove + ['ground_truth_answer'] # Remove all prior columns
+        remove_columns=columns_to_remove # Remove all columns that were input to this map
     )
-    # --- End FIX ---
-    logger.info(f"Tokenization complete. Final columns: {tokenized_eval_dataset.column_names}")
-    # Check if expected columns are present
+    # Now tokenized_eval_dataset should *only* contain 'input_ids', 'attention_mask'
+    logger.info(f"Tokenization complete. Final columns for DataLoader: {tokenized_eval_dataset.column_names}")
     if not all(col in tokenized_eval_dataset.column_names for col in ['input_ids', 'attention_mask']):
          logger.error(f"Tokenized dataset missing required columns for eval. Found: {tokenized_eval_dataset.column_names}")
          raise ValueError("Tokenized dataset missing required columns.")
@@ -209,6 +209,7 @@ def run_evaluation(
 
     # --- Create DataLoader ---
     eval_batch_size = cfg.evaluation.get("batch_size", cfg.training.get("per_device_eval_batch_size", 4))
+    # DataLoader uses the tokenized dataset (only input_ids, attention_mask)
     eval_dataloader = DataLoader(
         tokenized_eval_dataset,
         batch_size=eval_batch_size,
@@ -235,21 +236,18 @@ def run_evaluation(
     # --- Evaluation Loop (Batched) ---
     local_results = []
     progress_bar = tqdm(total=len(eval_dataloader), desc="Running Batched Evaluation", disable=not accelerator.is_local_main_process)
+    processed_samples = 0 # Keep track of samples processed for indexing ground truth
 
     for batch in eval_dataloader:
         input_ids = batch['input_ids']
         attention_mask = batch['attention_mask']
-        # Ground truth should now be correctly passed if it was returned by preprocess_function
-        # DataCollatorWithPadding typically passes through columns it doesn't process
-        try:
-            ground_truths_batch = batch['ground_truth_answer']
-        except KeyError:
-            logger.error("Ground truth answers ('ground_truth_answer') not found in DataLoader batch.")
-            batch_size_fallback = input_ids.shape[0]
-            for i in range(batch_size_fallback):
-                 local_results.append({'prediction': '[ERROR: GT Missing]', 'ground_truth': 'N/A', 'is_correct': False})
-            progress_bar.update(1)
-            continue
+        current_batch_size = input_ids.shape[0]
+
+        # --- FIX: Get corresponding ground truths from the original list ---
+        start_idx = processed_samples
+        end_idx = processed_samples + current_batch_size
+        ground_truths_batch = ground_truths_all[start_idx:end_idx]
+        # --- End FIX ---
 
         try:
             gen_kwargs_batch = generation_kwargs.copy()
@@ -260,7 +258,7 @@ def run_evaluation(
 
             for i in range(len(predictions_batch)):
                 prediction = predictions_batch[i]
-                ground_truth = ground_truths_batch[i]
+                ground_truth = ground_truths_batch[i] # Use the correctly indexed ground truth
                 pred_answer = extract_gsm8k_answer(prediction)
                 true_answer = extract_gsm8k_answer(ground_truth)
                 is_correct = False
@@ -273,11 +271,12 @@ def run_evaluation(
                 local_results.append({'prediction': prediction, 'ground_truth': ground_truth, 'is_correct': is_correct})
 
         except Exception as e:
-            logger.error(f"Error during generation or processing batch: {e}", exc_info=True)
-            batch_size = len(ground_truths_batch) if 'ground_truths_batch' in locals() else input_ids.shape[0]
-            for i in range(batch_size):
-                 gt = ground_truths_batch[i] if 'ground_truths_batch' in locals() else 'N/A'
+            logger.error(f"Error during generation or processing batch starting at index {start_idx}: {e}", exc_info=True)
+            for i in range(current_batch_size):
+                 gt = ground_truths_batch[i] if i < len(ground_truths_batch) else 'N/A'
                  local_results.append({'prediction': '[ERROR: Batch Failed]', 'ground_truth': gt, 'is_correct': False})
+
+        processed_samples += current_batch_size # Update sample counter
         progress_bar.update(1)
     progress_bar.close()
 
@@ -353,10 +352,12 @@ def main():
     else: logger.info(f"Running evaluation with BASE model: '{cfg.model.name}'")
 
     try:
+        # Load data - results in dataset with 'prompt', 'ground_truth_answer', etc.
         eval_dataset_formatted = load_and_prepare_eval_data(cfg, tokenizer)
     except Exception as e: logger.error(f"Exiting due to eval data loading/prep failure: {e}", exc_info=True); sys.exit(1)
 
     logger.info("Starting evaluation process...")
+    # Pass the formatted dataset (before tokenization) to run_evaluation
     eval_metrics = run_evaluation(model, tokenizer, eval_dataset_formatted, cfg, accelerator, is_base_model_eval)
 
     # --- Construct Output File Path and Save Metrics ---
