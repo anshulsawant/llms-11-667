@@ -324,6 +324,11 @@ class ActorModelWithValueHead(nn.Module):
         self.config = self.base_model.config  # Store config
         # Value head maps hidden states to scalar value
         self.value_head = nn.Linear(self.config.hidden_size, 1)
+
+        # Ensure value_head matches base model dtype ---
+        base_model_dtype = next(self.base_model.parameters()).dtype
+        self.value_head.to(base_model_dtype)
+        
         # Basic initialization for value head
         self.value_head.weight.data.normal_(mean=0.0, std=0.01)
         self.value_head.bias.data.zero_()
