@@ -6,6 +6,12 @@ Focuses on modularity and clarity over excessive defensive programming.
 """
 
 import logging
+logging.basicConfig(
+    level=logging.INFO, # <<< Make sure this is INFO or DEBUG
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', # Example format
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
 import torch
 from torch import nn
 import torch.nn.functional as F
