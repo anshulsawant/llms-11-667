@@ -40,6 +40,7 @@ training:
   save_interval: 10 # Save model every N PPO steps
   output_dir: "outputs/ppo_gsm8k_${model.name}" # Sanitize model name, use model name in output
   device: "cuda"    # Set to "cpu" for CPU execution (use with debug config)
+  num_samples: 96
 
 # Generation settings for rollouts
 generation:
