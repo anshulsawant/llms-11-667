@@ -270,7 +270,7 @@ def compute_gae_advantages(
             token_level_rewards.scatter_(
                 1,
                 indices_to_update.long().unsqueeze(1), # Ensure index is long
-                rewards_to_apply,
+                rewards_to_apply.unsqueeze(1)
             )
 
         # Incorporate KL penalty at each step
@@ -998,16 +998,16 @@ def train(cfg: DictConfig):
     """Main PPO training loop."""
     # --- 1. Initial Setup ---
     device, output_dir = setup_training(cfg)
+
     # Save final config after setup
-    try:
-        OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
-    except Exception as e:
-        logging.info(f"Error saving final config: {e}")
-    wandb.init(
-        project=cfg.wandb.project,
-        config=OmegaConf.to_container(cfg, resolve=True), # Log resolved config
-        name=cfg.wandb.get("name", None) # Use configured name or default
-    )
+    OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
+
+    if cfg.wandb.report_to_wandb:
+        wandb.init(
+            project=cfg.wandb.project,
+            config=OmegaConf.to_container(cfg, resolve=True), # Log resolved config
+            name=cfg.wandb.get("name", None) # Use configured name or default
+        )
 
     # --- 2. Load Models and Tokenizer ---
     try:
@@ -1097,14 +1097,18 @@ def train(cfg: DictConfig):
         log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
         logging.info(f"Update Metrics (Avg over Epoch): {log_str}")
         logging.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
-        log_data_this_step["rollout/reward_mean"] = avg_reward # Add rollout reward
-        wandb.log(log_data_this_step, step=ppo_step)
+        log_data["rollout/reward_mean"] = avg_reward # Add rollout reward
+        if cfg.wandb.report_to_wandb:
+            wandb.log(log_data, step=ppo_step)
 
         # --- Phase 3: Save Checkpoint ---
         if (ppo_step + 1) % cfg.training.save_interval == 0:
             save_model(actor_model, tokenizer,
                        os.path.join(output_dir, f"step_{ppo_step + 1}"))
 
+
+    if cfg.wandb.report_to_wandb:
+        wandb.finish()
     # --- 8. Final Save ---
     logging.info("\n--- PPO Training Finished ---")
     save_model(actor_model, tokenizer, os.path.join(output_dir, "final"))
@@ -1115,54 +1119,32 @@ def train(cfg: DictConfig):
 # ==============================================================================
 
 
-def load_config_with_cli_overrides(
-        default_config_path: str = "configs",
-        default_config_name: str = "config.yaml") -> DictConfig:
+def load_config_with_cli_overrides() -> DictConfig:
     """Loads OmegaConf config, handling defaults and CLI overrides."""
-    parser = argparse.ArgumentParser(description="PPO RL Trainer (Refactored)")
-    parser.add_argument("--config-path", type=str, default=default_config_path)
-    parser.add_argument("--config-name", type=str, default=default_config_name)
+    parser = argparse.ArgumentParser(description="PPO RL Trainer")
+    parser.add_argument("--config", type=str)
     parser.add_argument("overrides",
                         nargs="*",
                         help="Key=value config overrides")
     args = parser.parse_args()
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)  # Assumes script is in src/
-    config_dir_abs = os.path.join(project_root, args.config_path)
+    config_path = args.config 
 
-    conf_path = os.path.join(config_dir_abs, args.config_name)
-    if not os.path.exists(conf_path):  # Fallback to relative path
-        conf_path = os.path.join(args.config_path, args.config_name)
-
-    if not os.path.exists(conf_path):
+    if not os.path.exists(config_path):
         print(
             f"Error: Config file '{args.config_name}' not found in '{config_dir_abs}' or '{args.config_path}'."
         )
         sys.exit(1)
 
-    logging.info(f"Loading config from: {conf_path}")
-    cfg = OmegaConf.load(conf_path)
+    logging.info(f"Loading config from: {config_path}")
+    cfg = OmegaConf.load(config_path)
 
     # Handle 'defaults' for base config merging (simplified)
-    if 'defaults' in cfg and cfg.defaults:
-        base_conf_name = cfg.defaults[
-            0] + ".yaml"  # Assumes first default is base
-        base_conf_path = os.path.join(config_dir_abs, base_conf_name)
-        if not os.path.exists(base_conf_path):
-            base_conf_path = os.path.join(args.config_path,
-                                          base_conf_name)  # Fallback
-
-        if os.path.exists(base_conf_path):
-            logging.info(f"Loading base config from: {base_conf_path}")
-            base_cfg = OmegaConf.load(base_conf_path)
-            cfg = OmegaConf.merge(base_cfg, cfg)  # Merge base first
-        else:
-            logging.info(f"Warning: Base config '{base_conf_name}' not found.")
-        # Clean up defaults key if desired
-        OmegaConf.set_struct(cfg, False)
-        cfg.pop('defaults', None)
-        OmegaConf.set_struct(cfg, True)
+    if 'defaults' in cfg:
+        base_conf_path = cfg.defaults[0]
+        logging.info(f"Loading base config from: {base_conf_path}")
+        base_cfg = OmegaConf.load(base_conf_path)
+        cfg = OmegaConf.merge(base_cfg, cfg)  # Merge base first
 
     # Apply CLI overrides
     if args.overrides:
@@ -1174,7 +1156,7 @@ def load_config_with_cli_overrides(
     try:
         OmegaConf.resolve(cfg)
     except Exception as e:
-        logging.info(f"Warning: Config resolution error: {e}")
+        logging.warn(f"Warning: Config resolution error: {e}")
 
     logging.info("--------- Final Configuration ---------")
     logging.info(OmegaConf.to_yaml(cfg, resolve=True))  # Print resolved config

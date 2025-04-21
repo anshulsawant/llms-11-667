@@ -1,7 +1,7 @@
 # configs/config_debug.yaml
 # Inherit from the main config and override specific values for debugging
 defaults:
-  - config # Loads config.yaml first
+  - configs/config.yaml # Relative path of default config (wrt project root)
 
 # Override Model & Tokenizer for the tiny debug model
 model:
