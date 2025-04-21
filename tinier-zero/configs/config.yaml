@@ -9,6 +9,7 @@ model:
 # Dataset & Task Configuration
 dataset:
   name: "gsm8k"
+  config: "socratic"
   split: "train" # Use train split for prompts
   prompt_format: "Question: {question}\nAnswer:" # How to format the prompt
   max_prompt_length: 512 # Max tokens for prompt
@@ -29,6 +30,7 @@ ppo:
   gamma: 1.0        # Discount factor
   lam: 0.95         # GAE lambda
   use_8bit_adam: true
+  max_grad_norm: 1.0
 
 # Training Control
 training:
@@ -36,7 +38,7 @@ training:
   seed: 42
   log_interval: 1   # Log metrics every N PPO steps
   save_interval: 10 # Save model every N PPO steps
-  output_dir: "outputs/ppo_gsm8k_${model.name Sanitize model name}" # Use model name in output
+  output_dir: "outputs/ppo_gsm8k_${model.name}" # Sanitize model name, use model name in output
   device: "cuda"    # Set to "cpu" for CPU execution (use with debug config)
 
 # Generation settings for rollouts

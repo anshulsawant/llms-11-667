@@ -1,271 +1,470 @@
-# src/ppo_trainer_solutions.py
+# src/ppo_trainer_refactored.py
 # -*- coding: utf-8 -*-
+"""
+Refactored PPO Trainer script for pedagogical purposes.
+Focuses on modularity and clarity over excessive defensive programming.
+"""
+
 import torch
+from torch import nn
 import torch.nn.functional as F
 from torch.optim import AdamW
+from torch.utils.data import DataLoader
 # Try importing 8-bit AdamW from bitsandbytes
 try:
     import bitsandbytes.optim as bnb_optim
     bnb_available = True
 except ImportError:
-    # print("Warning: bitsandbytes not found. 8-bit Adam optimizer will not be available.")
     bnb_available = False
 
-from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, BitsAndBytesConfig
-from trl.models import AutoModelForCausalLMWithValueHead
-from datasets import load_dataset
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    GenerationConfig,
+    BitsAndBytesConfig,
+    PreTrainedModel,
+    PreTrainedTokenizerBase,
+    DataCollatorWithPadding  # Can be useful if not using custom collate
+)
+from datasets import load_dataset, Dataset
 import numpy as np
 import random
 import re
 import math
 from tqdm.auto import tqdm
 import os
-from omegaconf import OmegaConf, DictConfig  # Import OmegaConf
-import argparse  # For command-line arguments
-import sys  # To modify path for tests if needed
+from omegaconf import OmegaConf, DictConfig
+import argparse
+import sys
+from typing import List, Dict, Any, Tuple, Optional
+
+# ==============================================================================
+# == 1. Helper Functions (Masking, Reward, Padding)
+# ==============================================================================
 
 
-# --- Helper Functions (Masked Ops, Reward) ---
-def masked_mean(tensor, mask, dim=None):
+def masked_mean(tensor: torch.Tensor,
+                mask: Optional[torch.Tensor],
+                dim: Optional[int] = None) -> torch.Tensor:
     """Calculates mean of tensor elements specified by mask."""
     if mask is None:
         return torch.mean(tensor, dim=dim)
-    # Ensure mask is boolean and expanded
     mask = mask.bool()
+    # Expand mask dimensions if necessary
     while mask.dim() < tensor.dim():
         mask = mask.unsqueeze(-1)
-    # Ensure shapes match after expansion
-    if tensor.shape != mask.shape:
-        mask = mask.expand_as(tensor)
+    mask = mask.expand_as(tensor)  # Ensure shapes match
 
     masked_tensor = torch.where(
         mask, tensor,
         torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
-    # Add epsilon for stability in case mask sum is zero
-    mean = masked_tensor.sum(dim=dim) / (mask.sum(dim=dim).float() + 1e-8)
+    mean = masked_tensor.sum(dim=dim) / (mask.sum(dim=dim).float() + 1e-8
+                                         )  # Add epsilon for stability
     return mean
 
 
-def masked_whiten(tensor, mask, shift_mean=True):
+def masked_whiten(tensor: torch.Tensor,
+                  mask: Optional[torch.Tensor],
+                  shift_mean: bool = True) -> torch.Tensor:
     """Whitens the tensor values specified by the mask."""
-    # Ensure mask is boolean and expanded
     mask = mask.bool()
     while mask.dim() < tensor.dim():
         mask = mask.unsqueeze(-1)
-    # Ensure shapes match after expansion
-    if tensor.shape != mask.shape:
-        mask = mask.expand_as(tensor)
+    mask = mask.expand_as(tensor)
 
     mean = masked_mean(tensor, mask, dim=None)
     masked_tensor_variance = torch.where(
         mask, (tensor - mean)**2,
         torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
     variance = masked_mean(masked_tensor_variance, mask, dim=None)
-    # Add epsilon for numerical stability
-    std = torch.sqrt(variance + 1e-8)
+    std = torch.sqrt(variance + 1e-8)  # Add epsilon for stability
 
     whitened = (tensor - mean) / std if shift_mean else tensor / std
-    # Return 0 where mask is False for whitened tensor to avoid propagating non-sensical values
     return torch.where(
         mask, whitened,
         torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
 
 
-def extract_gsm8k_solution(solution_str):
-    """Extracts the numerical answer from the #### format."""
-    # Use strict method first
-    solution = re.search(r"####\s*([-+]?\s*[\d\.\,]+)", solution_str)
-    if solution is None:
-        # Try finding the last number if strict format fails (more flexible)
-        answer = re.findall(r"([-+]?\s*[\d\.\,]+)", solution_str)
-        if len(answer) > 0:
-            # Take the last number found
-            final_answer_str = answer[-1].replace(',', '').replace(' ', '')
+def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
+    """Extracts the numerical answer from the #### format.
+
+    Does not handle scientific notation.
+    """
+    # Use strict method first: Search for #### followed by a potential number
+    # The regex captures digits, optional sign, dots, and commas.
+    solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
+
+    if solution_match:
+        # Extract the captured group (potential number string)
+        potential_answer_str = solution_match.group(1).replace(',', '').replace(' ', '')
+        # --- ADDED VALIDATION ---
+        # Check if the extracted string is actually a valid number
+        try:
+            float(potential_answer_str)
+            return potential_answer_str # Return only if it's a valid float
+        except ValueError:
+            return None # Not a valid number, return None
+        # --- END ADDED VALIDATION ---
+    else:
+        # Fallback: Try finding the *last* potential number string in the whole text
+        answer_list = re.findall(r"([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
+        if answer_list:
+            # Get the last match
+            final_answer_str = answer_list[-1].replace(',', '').replace(' ', '')
+            # Validate if the last match is a number
             try:
-                # Validate if it's a number
                 float(final_answer_str)
                 return final_answer_str
             except ValueError:
-                return None  # Last "number" wasn't valid
+                return None # Last "number" wasn't valid
         else:
-            return None  # No number found
-    else:
-        # Extract from #### format
-        final_answer_str = solution.group(1).replace(',', '').replace(' ', '')
-        return final_answer_str
+            # No number found anywhere
+            return None
 
 
-def compute_gsm8k_reward(generated_text, ground_truth_str):
+def compute_gsm8k_reward(generated_text: str, ground_truth_str: str) -> float:
     """Computes reward: 1.0 if extracted answer matches ground truth, 0 otherwise."""
     extracted_answer_str = extract_gsm8k_solution(generated_text)
-    if extracted_answer_str is None:
-        return 0.0
+    if extracted_answer_str is None: return 0.0
     try:
-        # Compare numerically after converting
         extracted_answer = float(extracted_answer_str)
         ground_truth = float(ground_truth_str)
-        # Use math.isclose for robust float comparison
-        if math.isclose(extracted_answer, ground_truth):
-            return 1.0
-        else:
-            return 0.0
+        return 1.0 if math.isclose(extracted_answer, ground_truth) else 0.0
     except ValueError:
-        # Handle cases where extraction gives non-numeric results despite regex
-        return 0.0
+        return 0.0  # Handle non-numeric cases
 
 
-# --- Core PPO Logic (Implementations Included) ---
-
-# Implementation 1: Policy Loss
-def compute_policy_loss(log_probs_new, log_probs_old, advantages,
-                        response_mask, clip_ratio):
+def pad_and_collate_tensors(tensor_list: List[torch.Tensor],
+                            padding_value: float = 0.0) -> torch.Tensor:
     """
-    Computes PPO policy loss (clipped surrogate objective).
-    Reference: TinyZero/verl/trainer/ppo/core_algos.py `compute_policy_loss`
+    Pads tensors in a list to the maximum length of the second dimension
+    and concatenates them along the first dimension.
+
+    Assumes input tensors are 2D.
     """
-    with torch.no_grad(
-    ):  # Should not update advantages during policy loss calculation
-        # Ensure mask aligns with logprobs length (batch, resp_len)
+    # Find max length in the second dimension (sequence length)
+    max_len = max([t.shape[1] for t in tensor_list])
+    
+    if max_len == 0:  # Handle cases where all sequences have length 0
+        total_batch_size = sum(t.shape[0] for t in tensor_list)
+        # Return shape (TotalB, 0, ...) matching original dims > 1
+        original_shape = tensor_list[0].shape
+        return torch.empty((total_batch_size, 0) + original_shape[2:],
+                           dtype=tensor_list[0].dtype,
+                           device=tensor_list[0].device)
+
+    # Pad each tensor and collect in a new list
+    padded_list = []
+    for t in tensor_list:
+        current_len = t.shape[1]
+        padding_needed = max_len - current_len
+        if padding_needed > 0:
+            pad_tuple = (0, padding_needed, 0, 0)
+            t = F.pad(t,
+                             tuple(pad_tuple),
+                             mode='constant',
+                             value=padding_value)
+        padded_list.append(t)  # No padding needed or already max length
+
+    # Concatenate the padded tensors along the batch dimension (dim=0)
+    return torch.cat(padded_list, dim=0)
+
+
+# ==============================================================================
+# == 2. Core PPO Algorithm Components
+# ==============================================================================
+
+
+def compute_policy_loss(
+        log_probs_new: torch.Tensor, log_probs_old: torch.Tensor,
+        advantages: torch.Tensor, response_mask: torch.Tensor,
+        clip_ratio: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Computes PPO policy loss (clipped surrogate objective)."""
+    with torch.no_grad():
         mask = response_mask.bool()
-        # Align advantages: assumes advantages correspond to states *before* actions
+        # Advantages should align with states *before* actions (logprobs)
         if advantages.shape != log_probs_old.shape:
             raise ValueError(
-                f"Shape mismatch between advantages {advantages.shape} and log_probs {log_probs_old.shape} in policy loss"
+                f"Shape mismatch: advantages {advantages.shape}, log_probs {log_probs_old.shape}"
             )
-        advantages_aligned = advantages
-
-    # Calculate ratio, clamp log_ratio for stability
-    log_ratio = (log_probs_new - log_probs_old).clamp(-20, 20)
+    log_ratio = (log_probs_new - log_probs_old).clamp(
+        -20, 20)  # Clamp for stability
     ratio = torch.exp(log_ratio)
-
-    # Calculate surrogate objectives
-    surr1 = ratio * advantages_aligned
-    surr2 = torch.clamp(ratio, 1.0 - clip_ratio,
-                        1.0 + clip_ratio) * advantages_aligned
-
-    # Policy loss = - mean(min(surr1, surr2)) over mask
+    surr1 = ratio * advantages
+    surr2 = torch.clamp(ratio, 1.0 - clip_ratio, 1.0 + clip_ratio) * advantages
     policy_loss = -masked_mean(torch.min(surr1, surr2), mask)
 
-    # Calculate clip fraction and approx KL for logging
     with torch.no_grad():
         clip_frac = masked_mean(
             torch.gt(torch.abs(ratio - 1.0), clip_ratio).float(), mask)
-        # Negative approx KL (used in some implementations like TRL's) = log_ratio
-        # approx_kl = masked_mean(-log_ratio, mask) # KL(new || old)
-        # Or KL(old || new) as calculated before:
-        approx_kl = masked_mean(log_probs_old - log_probs_new, mask)
+        approx_kl = masked_mean(log_probs_old - log_probs_new,
+                                mask)  # KL(old || new)
 
     return policy_loss, clip_frac, approx_kl
 
 
-# Implementation 2: Value Loss
-def compute_value_loss(values_new, values_old, returns, response_mask,
-                       clip_range_value):
-    """
-    Computes PPO value loss (clipped).
-    Reference: TinyZero/verl/trainer/ppo/core_algos.py `compute_value_loss`
-    """
-    # Ensure mask aligns with values length (batch, resp_len)
+def compute_value_loss(
+        values_new: torch.Tensor, values_old: torch.Tensor,
+        returns: torch.Tensor, response_mask: torch.Tensor,
+        clip_range_value: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Computes PPO value loss (clipped)."""
     mask = response_mask.bool()
-
-    # Clip predicted values based on old values
     values_pred_clipped = values_old + torch.clamp(
         values_new - values_old, -clip_range_value, clip_range_value)
-    # Calculate squared error losses
     vf_loss1 = (values_new - returns)**2
     vf_loss2 = (values_pred_clipped - returns)**2
-    # Value loss = 0.5 * mean(max(vf_loss1, vf_loss2)) over mask
     value_loss = 0.5 * masked_mean(torch.max(vf_loss1, vf_loss2), mask)
 
-    # Calculate clip fraction for logging
     with torch.no_grad():
         vf_clip_frac = masked_mean(torch.gt(vf_loss2, vf_loss1).float(), mask)
 
     return value_loss, vf_clip_frac
 
 
-# Implementation 3: Entropy Loss
-def compute_entropy_loss(logits_new, response_mask):
-    """
-    Computes entropy loss to encourage exploration.
-    Reference: TinyZero/verl/trainer/ppo/core_algos.py `compute_entropy_loss`
-    """
-    # Ensure mask aligns with logits length (batch, resp_len)
+def compute_entropy_loss(logits_new: torch.Tensor,
+                         response_mask: torch.Tensor) -> torch.Tensor:
+    """Computes entropy loss to encourage exploration."""
     mask = response_mask.bool()
-    # Ensure logits are float32 for stable distribution calculation
-    logits_float = logits_new.float()
-
-    # Calculate entropy from logits
-    dist = torch.distributions.Categorical(logits=logits_float)
-    entropy = dist.entropy()  # Shape: (batch, resp_len)
-
-    # Entropy loss = - mean(entropy) over mask
-    entropy_loss = -masked_mean(entropy,
-                                mask)  # Negative because we maximize entropy
-
+    # Use float32 for stability
+    dist = torch.distributions.Categorical(logits=logits_new.float())
+    entropy = dist.entropy()
+    # Maximize entropy -> minimize negative entropy
+    entropy_loss = -masked_mean(entropy, mask)
     return entropy_loss
 
 
-# Implementation 4: GAE Advantages
-def compute_gae_advantages(final_rewards, kl_penalties, values, response_mask,
-                           gamma, lam):
-    """
-    Computes GAE advantages based on TinyZero/verl/trainer/ppo/core_algos.py.
-    KL penalty is incorporated into the rewards here.
-    """
+def compute_gae_advantages(
+        final_rewards: torch.Tensor,  # Shape (batch_size,)
+        kl_penalties: torch.Tensor,  # Shape (batch_size, resp_len)
+        values: torch.Tensor,       # Shape (batch_size, resp_len) - V(s_t)
+        response_mask: torch.Tensor,# Shape (batch_size, resp_len)
+        gamma: float,
+        lam: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Computes GAE advantages and returns."""
     with torch.no_grad():
         response_length = values.shape[1]
         advantages_reversed = []
-        last_gae_lam = 0
+        last_gae_lam = 0 # Stores A_{t+1} during the loop
 
-        # Construct token-level rewards: 0 everywhere except last token (gets final reward), minus KL penalty
+        # Assign final reward to the last actual token step
         token_level_rewards = torch.zeros_like(values)
-        sequence_lengths = response_mask.sum(dim=1)
-        last_token_indices = (sequence_lengths - 1).clamp(
-            min=0)  # Ensure indices are valid
+        # Ensure response_mask is long for sum()
+        sequence_lengths = response_mask.long().sum(dim=1)
+        # Ensure indices are long and handle 0-length sequences
+        last_token_indices = (sequence_lengths - 1).clamp(min=0)
 
         valid_indices = sequence_lengths > 0
         if valid_indices.any():
-            batch_indices = torch.arange(values.shape[0],
-                                         device=values.device)[valid_indices]
-            indices_to_update = last_token_indices[valid_indices]
+            # Ensure indices used for indexing final_rewards are valid
             rewards_to_apply = final_rewards[valid_indices]
-            token_level_rewards.scatter_(1, indices_to_update.unsqueeze(1),
-                                         rewards_to_apply.unsqueeze(1))
+            indices_to_update = last_token_indices[valid_indices]
+            # Scatter reward to the step *before* the terminal state
+            token_level_rewards.scatter_(
+                1,
+                indices_to_update.long().unsqueeze(1), # Ensure index is long
+                rewards_to_apply.unsqueeze(1)
+            )
 
-        # Subtract KL penalty at each step
-        token_level_rewards = token_level_rewards - kl_penalties  # Assumes kl_penalties = kl_coeff * kl_divergence
+        # Incorporate KL penalty at each step
+        token_level_rewards = token_level_rewards - kl_penalties
 
-        # GAE calculation loop
+        # GAE loop (Iterate backwards from T-1 down to 0)
         for t in reversed(range(response_length)):
-            next_values = values[:, t +
-                                 1] if t < response_length - 1 else torch.zeros_like(
-                                     values[:, 0])
-            current_mask = response_mask[:, t].float()
-            delta = token_level_rewards[:,
-                                        t] + gamma * next_values * current_mask - values[:,
-                                                                                         t]
-            last_gae_lam = delta + gamma * lam * last_gae_lam * current_mask
+            # Value of next state V(s_{t+1})
+            next_values = values[:, t + 1] if t < response_length - 1 else torch.zeros_like(values[:, 0])
+            # Mask for *next* step (needed for propagation)
+            next_mask = response_mask[:, t + 1].float() if t < response_length - 1 else torch.zeros_like(response_mask[:, 0].float())
+
+            # TD residual: delta_t = r_t + gamma * V(s_{t+1})*mask_{t+1} - V(s_t)
+            # Note: We use next_mask for V(s_{t+1}) term. V(s_t) term (values[:, t]) is used regardless of mask_t
+            # because delta is non-zero even if s_t is terminal (used for A_t calc).
+            delta = token_level_rewards[:, t] + gamma * next_values * next_mask - values[:, t]
+
+            # GAE: A_t = delta_t + gamma * lambda * A_{t+1} * mask_{t+1}
+            # last_gae_lam holds A_{t+1} from previous iteration
+            # --- MODIFIED LINE ---
+            last_gae_lam = delta + gamma * lam * last_gae_lam * next_mask # Use next_mask here
+            # --- END MODIFIED LINE ---
             advantages_reversed.append(last_gae_lam)
 
+        # Reverse the list and stack into a tensor
         advantages = torch.stack(advantages_reversed[::-1], dim=1)
-        returns = advantages + values  # Return = Advantage + Value
+        # Returns = Advantages + Values (Return G_t = A_t + V(s_t))
+        returns = advantages + values
 
-        # Whiten advantages (normalize)
+        # Whiten advantages (normalize) - Use the original response_mask here
         advantages = masked_whiten(advantages, response_mask)
 
     return advantages, returns
 
 
-# --- Rollout Phase ---
-def perform_rollouts(actor_model, ref_model, tokenizer, prompt_dataloader,
-                     gen_config, device):
+# ==============================================================================
+# == 3. Actor Model Definition
+# ==============================================================================
+
+
+class ActorModelWithValueHead(nn.Module):
     """
-    Generates responses and computes necessary data for PPO update.
-    (Full implementation included below)
+    Wraps a pre-trained transformer, adding a value head and generation method.
+    Computes per-token values.
     """
-    # (Implementation remains the same as previous response)
-    rollout_buffer = {
+
+    def __init__(self, model_name_or_path: str, **kwargs_model_load):
+        """Initializes the model, loading the base transformer and value head."""
+        super().__init__()
+        self.base_model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path, **kwargs_model_load)
+        self.config = self.base_model.config  # Store config
+        # Value head maps hidden states to scalar value
+        self.value_head = nn.Linear(self.config.hidden_size, 1)
+        # Basic initialization for value head
+        self.value_head.weight.data.normal_(mean=0.0, std=0.01)
+        self.value_head.bias.data.zero_()
+
+    def forward(self,
+                input_ids: torch.Tensor,
+                attention_mask: Optional[torch.Tensor] = None,
+                **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass: computes logits and per-token values."""
+        outputs = self.base_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,  # Need hidden states for value head
+            **kwargs)
+        logits = outputs.logits
+        # Get last hidden state (batch, seq_len, hidden_size)
+        last_hidden_state = outputs.hidden_states[-1]
+        # Compute value for each token's hidden state
+        values = self.value_head(last_hidden_state).squeeze(
+            -1)  # Shape: (batch, seq_len)
+        return logits, values
+
+    @torch.no_grad()
+    def generate(self, *args, **kwargs):
+        """Forwards generate call to the base model."""
+        return self.base_model.generate(*args, **kwargs)
+
+
+# ==============================================================================
+# == 4. Rollout Phase Logic
+# ==============================================================================
+
+
+def generate_responses(
+        model: ActorModelWithValueHead, tokenizer: PreTrainedTokenizerBase,
+        prompt_ids: torch.Tensor, prompt_mask: torch.Tensor,
+        gen_config: GenerationConfig) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Generates responses for a batch of prompts."""
+    model.eval()  # Ensure model is in eval mode for generation
+    with torch.no_grad():
+        generated_output = model.generate(
+            input_ids=prompt_ids,
+            attention_mask=prompt_mask,
+            generation_config=gen_config,
+            pad_token_id=tokenizer.pad_token_id  # Important for generation
+        )
+        # Extract only generated tokens (after prompt)
+        response_ids = generated_output[:, prompt_ids.shape[1]:]
+        # Create response mask (1 for real tokens, 0 for padding)
+        response_mask = (response_ids != tokenizer.pad_token_id).long()
+    return response_ids, response_mask
+
+
+def calculate_rollout_stats(
+    actor_model: ActorModelWithValueHead,
+    ref_model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    prompt_ids: torch.Tensor,  # Shape (batch, prompt_len)
+    prompt_mask: torch.Tensor,  # Shape (batch, prompt_len)
+    response_ids: torch.Tensor,  # Shape (batch, resp_len)
+    response_mask: torch.Tensor  # Shape (batch, resp_len)
+) -> Dict[str, torch.Tensor]:
+    """Calculates logprobs, ref_logprobs, values, and rewards for a batch."""
+    actor_model.eval()
+    ref_model.eval()
+    with torch.no_grad():
+        # Combine prompt and response for forward passes
+        full_ids = torch.cat((prompt_ids, response_ids), dim=1)
+        full_mask = torch.cat((prompt_mask, response_mask), dim=1)
+
+        # Get actor logits and values
+        actor_logits, actor_values = actor_model(full_ids,
+                                                 attention_mask=full_mask)
+        # Get reference model logits
+        ref_logits = ref_model(full_ids, attention_mask=full_mask).logits
+
+        # --- Calculate Logprobs and Values for the RESPONSE part ---
+        prompt_len = prompt_ids.shape[1]
+        resp_len = response_ids.shape[1]
+        full_len = full_ids.shape[1]
+
+        # Logits/Values indices: We need state BEFORE generating token R_t
+        # Corresponds to indices from prompt_len-1 to full_len-2
+        start_idx = prompt_len - 1
+        end_idx = full_len - 1  # Slice up to (but not including) this index
+
+        if start_idx < 0 or end_idx <= start_idx or resp_len == 0:
+            # Handle cases with empty response or invalid indices
+            logprobs = torch.empty((prompt_ids.shape[0], 0),
+                                   dtype=torch.float,
+                                   device=prompt_ids.device)
+            ref_logprobs = torch.empty((prompt_ids.shape[0], 0),
+                                       dtype=torch.float,
+                                       device=prompt_ids.device)
+            values = torch.empty((prompt_ids.shape[0], 0),
+                                 dtype=torch.float,
+                                 device=prompt_ids.device)
+        else:
+            logits_resp = actor_logits[:, start_idx:end_idx, :]
+            ref_logits_resp = ref_logits[:, start_idx:end_idx, :]
+            values = actor_values[:, start_idx:
+                                  end_idx]  # Values for states BEFORE response tokens
+
+            # Target IDs are the response tokens
+            target_ids = response_ids
+
+            # Ensure shapes match before gather (can differ if generation stopped early)
+            current_resp_len = logits_resp.shape[1]
+            if current_resp_len != target_ids.shape[1]:
+                min_len = min(current_resp_len, target_ids.shape[1])
+                logits_resp = logits_resp[:, :min_len, :]
+                ref_logits_resp = ref_logits_resp[:, :min_len, :]
+                target_ids = target_ids[:, :min_len]
+                values = values[:, :min_len]
+                # Adjust response mask as well if lengths mismatch
+                response_mask_adjusted = response_mask[:, :min_len]
+            else:
+                response_mask_adjusted = response_mask
+
+            # Calculate log probabilities
+            logprobs_all = F.log_softmax(logits_resp, dim=-1)
+            ref_logprobs_all = F.log_softmax(ref_logits_resp, dim=-1)
+            logprobs = torch.gather(logprobs_all, 2,
+                                    target_ids.unsqueeze(-1)).squeeze(-1)
+            ref_logprobs = torch.gather(ref_logprobs_all, 2,
+                                        target_ids.unsqueeze(-1)).squeeze(-1)
+
+            # Apply mask (mask should match the potentially adjusted length)
+            logprobs = logprobs * response_mask_adjusted
+            ref_logprobs = ref_logprobs * response_mask_adjusted
+            values = values * response_mask_adjusted
+
+    return {
+        "logprobs": logprobs,
+        "ref_logprobs": ref_logprobs,
+        "values": values,
+    }
+
+
+def perform_rollouts(actor_model: ActorModelWithValueHead,
+                     ref_model: PreTrainedModel,
+                     tokenizer: PreTrainedTokenizerBase,
+                     prompt_dataloader: DataLoader,
+                     gen_config: GenerationConfig,
+                     device: torch.device) -> Dict[str, Any]:
+    """Generates responses and computes stats for PPO update."""
+    # Temporary buffer to store results from each batch before collation
+    buffer_lists = {
         "prompt_input_ids": [],
         "prompt_attention_mask": [],
         "response_input_ids": [],
@@ -277,388 +476,553 @@ def perform_rollouts(actor_model, ref_model, tokenizer, prompt_dataloader,
         "full_texts": [],
         "ground_truth_answers": []
     }
-    actor_model.eval()
-    ref_model.eval()
+
     progress_bar = tqdm(prompt_dataloader, desc="Rollout", leave=False)
     for batch in progress_bar:
+        if batch is None:  # Handle potential error from collate_fn
+            print("Warning: Skipping None batch from dataloader.")
+            continue
         prompt_ids = batch["prompt_input_ids"].to(device)
         prompt_mask = batch["prompt_attention_mask"].to(device)
-        ground_truths = batch["ground_truth_answers"]
-        with torch.no_grad():
-            generated_output = actor_model.generate(
-                input_ids=prompt_ids,
-                attention_mask=prompt_mask,
-                generation_config=gen_config,
-                return_dict_in_generate=True,
-                output_scores=True,
-            )
-            response_ids = generated_output.sequences[:, prompt_ids.shape[1]:]
-            full_ids = torch.cat((prompt_ids, response_ids), dim=1)
-            response_mask = (response_ids
-                             != tokenizer.pad_token_id).long().to(device)
-            full_mask = torch.cat((prompt_mask, response_mask), dim=1)
-            outputs = actor_model(full_ids, attention_mask=full_mask)
-            logits = outputs.logits
-            values = outputs.value.squeeze(-1)
-            ref_outputs = ref_model(full_ids, attention_mask=full_mask)
-            ref_logits = ref_outputs.logits
-            prompt_len = prompt_ids.shape[1]
-            response_len = response_ids.shape[1]
-            if response_len > 0:
-                logits_for_logprobs = logits[:, prompt_len - 1:prompt_len +
-                                             response_len - 1, :]
-                ref_logits_for_logprobs = ref_logits[:, prompt_len -
-                                                     1:prompt_len +
-                                                     response_len - 1, :]
-                target_ids = response_ids
-                logprobs_all_vocab = F.log_softmax(logits_for_logprobs, dim=-1)
-                ref_logprobs_all_vocab = F.log_softmax(ref_logits_for_logprobs,
-                                                       dim=-1)
-                logprobs = torch.gather(logprobs_all_vocab, 2,
-                                        target_ids.unsqueeze(-1)).squeeze(-1)
-                ref_logprobs = torch.gather(
-                    ref_logprobs_all_vocab, 2,
-                    target_ids.unsqueeze(-1)).squeeze(-1)
-                values_response = values[:, prompt_len - 1:prompt_len +
-                                         response_len - 1]
-                logprobs = logprobs * response_mask
-                ref_logprobs = ref_logprobs * response_mask
-                values_response = values_response * response_mask
-            else:
-                logprobs = torch.zeros((prompt_ids.shape[0], 0), device=device)
-                ref_logprobs = torch.zeros((prompt_ids.shape[0], 0),
-                                           device=device)
-                values_response = torch.zeros((prompt_ids.shape[0], 0),
-                                              device=device)
-            full_decoded_texts = tokenizer.batch_decode(
-                full_ids, skip_special_tokens=True)
-            rewards = torch.tensor([
+        ground_truths = batch["ground_truth_answers"]  # List of strings
+
+        # 1. Generate responses
+        response_ids, response_mask = generate_responses(
+            actor_model, tokenizer, prompt_ids, prompt_mask,
+            gen_config)  # Shapes: (B, R_i), (B, R_i)
+
+        # 2. Calculate stats (logprobs, values, etc.)
+        stats = calculate_rollout_stats(
+            actor_model, ref_model, tokenizer, prompt_ids, prompt_mask,
+            response_ids, response_mask)  # Dict of tensors (B, R_i)
+
+        # 3. Decode texts and calculate rewards
+        full_ids = torch.cat((prompt_ids, response_ids), dim=1)
+        full_decoded_texts = tokenizer.batch_decode(full_ids,
+                                                    skip_special_tokens=True)
+        rewards = torch.tensor(
+            [
                 compute_gsm8k_reward(txt, gt)
                 for txt, gt in zip(full_decoded_texts, ground_truths)
             ],
-                                   dtype=torch.float32,
-                                   device=device)
-            rollout_buffer["prompt_input_ids"].append(prompt_ids.cpu())
-            rollout_buffer["prompt_attention_mask"].append(prompt_mask.cpu())
-            rollout_buffer["response_input_ids"].append(response_ids.cpu())
-            rollout_buffer["response_attention_mask"].append(
-                response_mask.cpu())
-            rollout_buffer["logprobs"].append(logprobs.cpu())
-            rollout_buffer["ref_logprobs"].append(ref_logprobs.cpu())
-            rollout_buffer["values"].append(values_response.cpu())
-            rollout_buffer["rewards"].append(rewards.cpu())
-            rollout_buffer["full_texts"].extend(full_decoded_texts)
-            rollout_buffer["ground_truth_answers"].extend(ground_truths)
+            dtype=torch.float32,
+            device='cpu'  # Calculate reward on CPU
+        )  # Shape: (B,)
+
+        # 4. Append results to buffer lists (moving tensors to CPU)
+        buffer_lists["prompt_input_ids"].append(prompt_ids.cpu())
+        buffer_lists["prompt_attention_mask"].append(prompt_mask.cpu())
+        buffer_lists["response_input_ids"].append(response_ids.cpu())
+        buffer_lists["response_attention_mask"].append(response_mask.cpu())
+        buffer_lists["logprobs"].append(stats["logprobs"].cpu())
+        buffer_lists["ref_logprobs"].append(stats["ref_logprobs"].cpu())
+        buffer_lists["values"].append(stats["values"].cpu())
+        buffer_lists["rewards"].append(rewards)  # Already on CPU
+        buffer_lists["full_texts"].extend(full_decoded_texts)
+        buffer_lists["ground_truth_answers"].extend(ground_truths)
+
+    # --- Collate the buffer lists into single tensors ---
     collated_buffer = {}
     padding_value_map = {
         "input_ids":
         tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0,
         "attention_mask":
         0,
+        "logprobs":
+        0.0,
+        "ref_logprobs":
+        0.0,
+        "values":
+        0.0,
     }
-    for key, data_list in rollout_buffer.items():
+    keys_to_pad_and_cat = [
+        "prompt_input_ids", "prompt_attention_mask", "response_input_ids",
+        "response_attention_mask", "logprobs", "ref_logprobs", "values"
+    ]
+
+    for key, data_list in buffer_lists.items():
         if key in ["full_texts", "ground_truth_answers"]:
-            collated_buffer[key] = data_list
+            collated_buffer[key] = data_list  # Keep as list
+        elif not data_list:
+            collated_buffer[key] = torch.empty(0)  # Handle empty list
         elif key == "rewards":
-            if data_list: collated_buffer[key] = torch.cat(data_list, dim=0)
-            else: collated_buffer[key] = torch.empty(0)
+            collated_buffer[key] = torch.cat(
+                data_list, dim=0)  # Simple concat for 1D rewards
+        elif key in keys_to_pad_and_cat:
+            # Determine padding value
+            pad_val = 0.0
+            for suffix, val in padding_value_map.items():
+                if key.endswith(suffix):
+                    pad_val = val
+                    break
+            # Pad list elements to max seq len and concatenate
+            collated_buffer[key] = pad_and_collate_tensors(
+                data_list, padding_value=pad_val)
         else:
-            if data_list:
-                if data_list[0].dim() > 0:
-                    pad_val = padding_value_map.get(key.split("_")[-1], 0.0)
-                    if all(isinstance(t, torch.Tensor) for t in data_list):
-                        try:
-                            collated_buffer[
-                                key] = torch.nn.utils.rnn.pad_sequence(
-                                    data_list,
-                                    batch_first=True,
-                                    padding_value=pad_val)
-                        except Exception as e_pad:
-                            print(
-                                f"Error during padding for key '{key}': {e_pad}. Trying simple concat."
-                            )
-                            try:
-                                collated_buffer[key] = torch.cat(data_list,
-                                                                 dim=0)
-                            except Exception as e_cat:
-                                print(
-                                    f"Concat failed for key '{key}': {e_cat}")
-                                collated_buffer[key] = []
-                    else:
-                        print(f"Warning: Non-tensor data for key '{key}'.")
-                        collated_buffer[key] = []
-                else:
-                    collated_buffer[key] = torch.cat(data_list, dim=0)
-            else:
-                collated_buffer[key] = torch.empty(0)
+            print(f"Warning: Unexpected key '{key}' in buffer collation.")
+            collated_buffer[key] = data_list  # Keep as is
+
     return collated_buffer
 
 
-# --- Update Phase (Implementation Filled In) ---
-def perform_ppo_update(actor_model, optimizer, rollout_buffer, cfg: DictConfig,
-                       device):
-    """
-    Performs PPO optimization steps on the collected rollout data.
-    """
-    actor_model.train()  # Set model to training mode
-    aggregate_metrics = {}  # To store aggregated metrics over all mini-batches
-    ppo_step_count = 0  # Counter for grad accumulation
+# ==============================================================================
+# == 5. PPO Update Phase Logic
+# ==============================================================================
 
-    # --- 1. Prepare Data ---
-    try:
-        # Load tensors from buffer to the training device
-        prompt_ids = rollout_buffer["prompt_input_ids"].to(device)
-        response_ids = rollout_buffer["response_input_ids"].to(device)
-        response_mask = rollout_buffer["response_attention_mask"].to(
-            device)  # Crucial mask
-        logprobs_old = rollout_buffer["logprobs"].to(
-            device)  # Shape: (batch, resp_len)
-        ref_logprobs = rollout_buffer["ref_logprobs"].to(
-            device)  # Shape: (batch, resp_len)
-        values_old = rollout_buffer["values"].to(
-            device)  # Shape: (batch, resp_len)
-        final_rewards = rollout_buffer["rewards"].to(device)  # Shape: (batch,)
 
-        if response_ids.numel() == 0 or response_ids.shape[1] == 0:
-            print("Warning: Skipping update. Empty responses in buffer.")
-            return {}
-        # Check shapes - logprobs, values, advantages, returns, mask should match response length
-        if not (logprobs_old.shape == response_ids.shape == ref_logprobs.shape
-                == values_old.shape == response_mask.shape):
-            print(
-                f"Warning: Shape mismatch detected after collation. Logprobs: {logprobs_old.shape}, Values: {values_old.shape}, Response: {response_ids.shape}, Mask: {response_mask.shape}. Skipping update."
-            )
-            return {}
+def run_ppo_update_epoch(
+        actor_model: ActorModelWithValueHead,
+        optimizer: torch.optim.Optimizer,
+        collated_buffer: Dict[
+            str, torch.Tensor],  # Assumes tensors are on correct device
+        cfg: DictConfig,
+        device: torch.device) -> Dict[str, float]:
+    """Runs one PPO epoch with mini-batch updates."""
+    actor_model.train()
+    aggregate_metrics = {}
+    ppo_step_count = 0  # For gradient accumulation tracking
 
-    except (KeyError, AttributeError, ValueError,
-            TypeError) as e:  # Catch potential errors
-        print(
-            f"Error loading/validating data from rollout buffer: {e}. Skipping update."
-        )
-        return {}
+    # Load data from buffer (already collated)
+    prompt_ids = collated_buffer["prompt_input_ids"]
+    prompt_mask = collated_buffer["prompt_attention_mask"]
+    response_ids = collated_buffer["response_input_ids"]
+    response_mask = collated_buffer["response_attention_mask"]
+    logprobs_old = collated_buffer["logprobs"]
+    ref_logprobs = collated_buffer["ref_logprobs"]
+    values_old = collated_buffer["values"]
+    final_rewards = collated_buffer["rewards"]
 
-    # --- 2. Compute Advantages and Returns (Once before PPO epochs) ---
+    # Combine inputs for forward pass
+    full_input_ids = torch.cat((prompt_ids, response_ids), dim=1)
+    full_attention_mask = torch.cat((prompt_mask, response_mask), dim=1)
+
+    # --- Calculate Advantages and Returns (Once per epoch) ---
     with torch.no_grad():
         kl_per_token = logprobs_old - ref_logprobs
-        kl_penalties = cfg.ppo.kl_coeff * kl_per_token  # Shape: (batch, resp_len)
-        advantages, returns = compute_gae_advantages(
-            final_rewards, kl_penalties, values_old, response_mask,
-            cfg.ppo.gamma, cfg.ppo.lam)  # Shapes: (batch, resp_len)
+        kl_penalties = cfg.ppo.kl_coeff * kl_per_token
+        advantages, returns = compute_gae_advantages(final_rewards,
+                                                     kl_penalties, values_old,
+                                                     response_mask,
+                                                     cfg.ppo.gamma,
+                                                     cfg.ppo.lam)
 
-    # --- 3. PPO Epoch Loop ---
-    num_samples = prompt_ids.shape[0]
+    # --- Mini-batch Loop ---
+    num_samples = full_input_ids.shape[0]
     indices = np.arange(num_samples)
-    prompt_len = prompt_ids.shape[1]  # Max prompt length in batch
-    response_len = response_ids.shape[
-        1]  # Max response length in batch after padding
+    np.random.shuffle(indices)
+    prompt_len = prompt_ids.shape[1]
+    resp_len = response_ids.shape[1]
 
-    # Combine prompt and response for forward pass during update
-    full_input_ids = torch.cat((prompt_ids, response_ids), dim=1)
-    prompt_mask_dev = rollout_buffer["prompt_attention_mask"].to(
-        device)  # Load prompt mask to device
-    full_attention_mask = torch.cat((prompt_mask_dev, response_mask), dim=1)
+    for i in range(0, num_samples, cfg.ppo.mini_batch_size):
+        ppo_step_count += 1
+        batch_indices = indices[i:i + cfg.ppo.mini_batch_size]
 
-    optimizer.zero_grad()  # Zero gradients once before starting updates
+        # Slice mini-batch data
+        batch_full_ids = full_input_ids[batch_indices]
+        batch_full_mask = full_attention_mask[batch_indices]
+        batch_logprobs_old = logprobs_old[batch_indices]
+        batch_values_old = values_old[batch_indices]
+        batch_advantages = advantages[batch_indices]
+        batch_returns = returns[batch_indices]
+        batch_response_mask = response_mask[batch_indices]
+        batch_response_tokens = response_ids[batch_indices]
 
-    for ppo_epoch in range(cfg.ppo.epochs):
-        np.random.shuffle(indices)
-        # --- 4. Mini-batch Loop ---
-        for i in range(0, num_samples, cfg.ppo.mini_batch_size):
-            ppo_step_count += 1
-            batch_indices = indices[i:i + cfg.ppo.mini_batch_size]
+        # --- PPO Mini-batch Update ---
+        # 1. Forward Pass
+        logits_new, values_new = actor_model(batch_full_ids,
+                                             attention_mask=batch_full_mask)
 
-            # Slice mini-batch data
-            batch_full_ids = full_input_ids[batch_indices]
-            batch_full_mask = full_attention_mask[batch_indices]
-            batch_logprobs_old = logprobs_old[
-                batch_indices]  # Shape: (mini_batch, resp_len)
-            batch_values_old = values_old[
-                batch_indices]  # Shape: (mini_batch, resp_len)
-            batch_advantages = advantages[
-                batch_indices]  # Shape: (mini_batch, resp_len)
-            batch_returns = returns[
-                batch_indices]  # Shape: (mini_batch, resp_len)
-            batch_response_mask = response_mask[
-                batch_indices]  # Shape: (mini_batch, resp_len)
-            # Need response tokens for calculating new logprobs from logits
-            batch_response_tokens = response_ids[
-                batch_indices]  # Shape: (mini_batch, resp_len)
-
-            # --- Implementation of PPO Mini-batch Update ---
-            # 1. Forward Pass: Get new logits and values from actor_model
-            outputs = actor_model(batch_full_ids,
-                                  attention_mask=batch_full_mask)
-            logits_new = outputs.logits  # Shape: (mini_batch, full_seq_len, vocab_size)
-            values_new = outputs.value.squeeze(
-                -1)  # Shape: (mini_batch, full_seq_len)
-
-            # 2. Calculate New Logprobs & Extract New Values for response part
-            if response_len > 0:
-                logits_new_response = logits_new[:, prompt_len - 1:prompt_len +
-                                                 response_len - 1, :]
-                logprobs_all_vocab_new = F.log_softmax(logits_new_response,
-                                                       dim=-1)
-                logprobs_new = torch.gather(
-                    logprobs_all_vocab_new, 2,
-                    batch_response_tokens.unsqueeze(-1)).squeeze(
-                        -1)  # Shape: (mini_batch, resp_len)
-                values_new_response = values_new[:, prompt_len - 1:prompt_len +
-                                                 response_len -
-                                                 1]  # Shape: (mini_batch, resp_len)
-
-                # Apply mask to ensure consistency (although loss functions should also use mask)
-                logprobs_new = logprobs_new * batch_response_mask
-                values_new_response = values_new_response * batch_response_mask
-            else:  # Should have been caught earlier, but safety check
-                logprobs_new = torch.zeros_like(batch_logprobs_old)
-                values_new_response = torch.zeros_like(batch_values_old)
-
-            # 4. Calculate Losses
-            policy_loss, p_clip_frac, approx_kl = compute_policy_loss(
-                logprobs_new, batch_logprobs_old, batch_advantages,
-                batch_response_mask, cfg.ppo.clip_ratio)
-            value_loss, v_clip_frac = compute_value_loss(
-                values_new_response, batch_values_old, batch_returns,
-                batch_response_mask, cfg.ppo.clip_range_value)
-            # Ensure logits passed to entropy loss match the dimension of the mask (resp_len)
-            entropy_loss = compute_entropy_loss(
-                logits_new[:, prompt_len - 1:prompt_len + response_len -
-                           1, :],  # Logits for response tokens
-                batch_response_mask  # Mask for response tokens
+        # 2. Extract response parts and calculate new logprobs
+        start_idx = prompt_len - 1
+        end_idx = prompt_len + resp_len - 1
+        if start_idx < 0 or end_idx <= start_idx or end_idx > logits_new.shape[
+                1]:
+            print(
+                f"Warning: Invalid slice indices in PPO update. Skipping mini-batch {i // cfg.ppo.mini_batch_size}."
             )
+            continue  # Skip this mini-batch
 
-            # 5. Combine Losses
-            loss = policy_loss + cfg.ppo.vf_coeff * value_loss + cfg.ppo.entropy_coeff * entropy_loss
+        logits_new_resp = logits_new[:, start_idx:end_idx, :]
+        values_new_resp = values_new[:, start_idx:end_idx]
 
-            # 6. Backward Pass
-            scaled_loss = loss / cfg.ppo.gradient_accumulation_steps
-            scaled_loss.backward()
+        # Check shape consistency before gather
+        if logits_new_resp.shape[1] != batch_response_tokens.shape[1]:
+            print(
+                f"Warning: Mismatch logits/response len in PPO update. Skipping mini-batch {i // cfg.ppo.mini_batch_size}."
+            )
+            continue
 
-            # 7. Store Metrics
-            current_metrics = {
-                'loss/policy': policy_loss.item(),
-                'loss/value': value_loss.item(),
-                'loss/entropy': -entropy_loss.item(),  # Store positive entropy
-                'loss/total': loss.item(),
-                'params/policy_clip_frac': p_clip_frac.item(),
-                'params/value_clip_frac': v_clip_frac.item(),
-                'params/approx_kl': approx_kl.item(),
-            }
-            for key, val in current_metrics.items():
-                aggregate_metrics.setdefault(key, []).append(val)
+        logprobs_all_new = F.log_softmax(logits_new_resp, dim=-1)
+        logprobs_new = torch.gather(
+            logprobs_all_new, 2,
+            batch_response_tokens.unsqueeze(-1)).squeeze(-1)
 
-            # 8. Optimizer Step
-            if ppo_step_count % cfg.ppo.gradient_accumulation_steps == 0:
-                if any(p.grad is not None for p in actor_model.parameters()):
-                    # Optional: Gradient Clipping
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        actor_model.parameters(), max_norm=1.0)
-                    aggregate_metrics.setdefault('params/grad_norm',
-                                                 []).append(grad_norm.item())
+        # Apply mask
+        logprobs_new = logprobs_new * batch_response_mask
+        values_new_resp = values_new_resp * batch_response_mask
 
-                    optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
+        # 3. Calculate Losses
+        policy_loss, p_clip_frac, approx_kl = compute_policy_loss(
+            logprobs_new, batch_logprobs_old, batch_advantages,
+            batch_response_mask, cfg.ppo.clip_ratio)
+        value_loss, v_clip_frac = compute_value_loss(values_new_resp,
+                                                     batch_values_old,
+                                                     batch_returns,
+                                                     batch_response_mask,
+                                                     cfg.ppo.clip_range_value)
+        entropy_loss = compute_entropy_loss(logits_new_resp,
+                                            batch_response_mask)
 
-    # Aggregate metrics over the PPO epoch
+        # 4. Combine Losses
+        loss = policy_loss + cfg.ppo.vf_coeff * value_loss + cfg.ppo.entropy_coeff * entropy_loss
+
+        # 5. Backward Pass & Gradient Accumulation
+        scaled_loss = loss / cfg.ppo.gradient_accumulation_steps
+        scaled_loss.backward()
+
+        # 6. Store Metrics
+        current_metrics = {
+            'loss/policy': policy_loss.item(),
+            'loss/value': value_loss.item(),
+            'loss/entropy': -entropy_loss.item(),
+            'loss/total': loss.item(),  # Store positive entropy
+            'params/policy_clip_frac': p_clip_frac.item(),
+            'params/value_clip_frac': v_clip_frac.item(),
+            'params/approx_kl': approx_kl.item(),
+        }
+        for key, val in current_metrics.items():
+            aggregate_metrics.setdefault(key, []).append(val)
+
+        # 7. Optimizer Step (if accumulation cycle complete)
+        if ppo_step_count % cfg.ppo.gradient_accumulation_steps == 0:
+            # Check if grads exist before clipping/stepping
+            grads_exist = any(p.grad is not None
+                              for p in actor_model.parameters()
+                              if p.requires_grad)
+            if grads_exist:
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    actor_model.parameters(), max_norm=cfg.ppo.max_grad_norm)
+                aggregate_metrics.setdefault('params/grad_norm',
+                                             []).append(grad_norm.item())
+                optimizer.step()
+            # Zero grad AFTER potential step
+            optimizer.zero_grad(set_to_none=True)
+
+    # --- End of Epoch ---
+    # Average metrics over the epoch
     final_metrics = {
         key: np.mean(val)
         for key, val in aggregate_metrics.items() if val
-    }  # Avoid division by zero
+    }
     return final_metrics
 
 
-# --- Main Training Function ---
-def train(cfg: DictConfig):
-    """Main training loop, now takes OmegaConf DictConfig object"""
-    # --- Setup ---
+def perform_ppo_updates(
+        actor_model: ActorModelWithValueHead,
+        optimizer: torch.optim.Optimizer,
+        rollout_buffer: Dict[str, Any],  # Can contain lists or tensors
+        cfg: DictConfig,
+        device: torch.device) -> Dict[str, float]:
+    """Performs multiple PPO epochs on the collected rollout data."""
+    # Move collated tensors from buffer to the training device
+    # This assumes collation happened correctly and produced tensors
+    try:
+        buffer_on_device = {
+            k: v.to(device) if isinstance(v, torch.Tensor) else v
+            for k, v in rollout_buffer.items()
+        }
+    except AttributeError as e:
+        print(
+            f"Error moving buffer to device, likely due to non-tensor data: {e}"
+        )
+        # Print buffer keys and types for debugging
+        print("Rollout Buffer Contents (Keys and Types):")
+        for k, v in rollout_buffer.items():
+            print(f"  {k}: {type(v)}")
+        return {}  # Cannot proceed
+
+    # Basic validation after moving to device
+    if "response_input_ids" not in buffer_on_device or \
+       not isinstance(buffer_on_device["response_input_ids"], torch.Tensor) or \
+       buffer_on_device["response_input_ids"].numel() == 0:
+        print(
+            "Warning: No response tokens found in buffer on device. Skipping PPO update."
+        )
+        return {}
+
+    all_epoch_metrics = {}
+    for ppo_epoch in range(cfg.ppo.epochs):
+        epoch_metrics = run_ppo_update_epoch(actor_model, optimizer,
+                                             buffer_on_device, cfg, device)
+        # Aggregate metrics across epochs (e.g., average or store last)
+        # Here, we just store the metrics from the last epoch for simplicity
+        all_epoch_metrics = epoch_metrics  # Overwrite with last epoch's metrics
+
+    return all_epoch_metrics
+
+
+# ==============================================================================
+# == 6. Training Setup and Orchestration
+# ==============================================================================
+
+
+def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
+    """Sets random seeds, device, and output directory."""
     random.seed(cfg.training.seed)
     np.random.seed(cfg.training.seed)
     torch.manual_seed(cfg.training.seed)
+
     if cfg.training.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
         torch.cuda.manual_seed_all(cfg.training.seed)
+        print(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
     else:
         if cfg.training.device == "cuda":
-            print(
-                "Warning: CUDA requested but not available, falling back to CPU."
-            )
+            print("Warning: CUDA requested but unavailable, using CPU.")
         device = torch.device("cpu")
     print(f"Using device: {device}")
 
     output_dir = cfg.training.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    try:
-        OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
-    except Exception as e:
-        print(f"Error saving effective config: {e}")
+    print(f"Output directory: {output_dir}")
+    # Save config (optional, can be done in main train loop)
+    # try: OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
+    # except Exception as e: print(f"Error saving config: {e}")
 
-    # --- Load Model & Tokenizer ---
+    return device, output_dir
+
+
+def load_models_and_tokenizer(
+    cfg: DictConfig, device: torch.device
+) -> Tuple[ActorModelWithValueHead, PreTrainedModel, PreTrainedTokenizerBase]:
+    """Loads tokenizer, actor model (with value head), and reference model."""
     print(f"Loading tokenizer: {cfg.model.tokenizer_name}")
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.tokenizer_name)
+    # --- Set Padding Token ---
     if tokenizer.pad_token is None or tokenizer.pad_token_id is None:
         print("Setting pad_token to eos_token.")
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
+    # Explicitly set padding side (optional, default is often right)
+    # tokenizer.padding_side = 'left' # Uncomment to use left padding
 
-    print(f"Loading model: {cfg.model.name}")
+    print(f"Loading models: {cfg.model.name}")
+    # --- Model Kwargs (dtype, quantization, etc.) ---
     model_kwargs = {}
     model_dtype_str = cfg.model.get("torch_dtype", "auto")
-    model_dtype = getattr(torch, model_dtype_str,
-                          "auto") if model_dtype_str != "auto" else "auto"
-    if model_dtype != "auto": print(f"Setting model dtype to: {model_dtype}")
-    model_kwargs["torch_dtype"] = model_dtype
+    if model_dtype_str != "auto":
+        try:
+            model_kwargs["torch_dtype"] = getattr(torch, model_dtype_str)
+        except AttributeError:
+            print(
+                f"Warning: Invalid torch_dtype '{model_dtype_str}'. Using auto."
+            )
     if cfg.model.get("trust_remote_code", False):
         model_kwargs["trust_remote_code"] = True
+    if cfg.model.get("quantization"):
+        q_cfg = cfg.model.quantization
+        print(f"Applying quantization: {q_cfg}")
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_8bit=q_cfg.get("load_in_8bit", False),
+            load_in_4bit=q_cfg.get("load_in_4bit", False),
+            bnb_4bit_quant_type=q_cfg.get("bnb_4bit_quant_type", "nf4"),
+            bnb_4bit_compute_dtype=getattr(
+                torch, q_cfg.get("bnb_4bit_compute_dtype", "float16")),
+            bnb_4bit_use_double_quant=q_cfg.get("bnb_4bit_use_double_quant",
+                                                False),
+        )
 
-    try:
-        actor_model = AutoModelForCausalLMWithValueHead.from_pretrained(
-            cfg.model.name, **model_kwargs)
-        actor_model.to(device)
-        if actor_model.config.pad_token_id is None:
-            actor_model.config.pad_token_id = tokenizer.pad_token_id
+    # --- Load Actor Model ---
+    actor_model = ActorModelWithValueHead(cfg.model.name, **model_kwargs)
+    if not cfg.model.get("quantization"):
+        actor_model.to(device)  # Move if not quantized
+    # Ensure pad token ID is set in model config
+    if actor_model.config.pad_token_id is None:
+        actor_model.config.pad_token_id = tokenizer.pad_token_id
+    print("Actor model loaded.")
 
-        ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(
-            cfg.model.name, **model_kwargs)
-        ref_model.to(device)
-        if ref_model.config.pad_token_id is None:
-            ref_model.config.pad_token_id = tokenizer.pad_token_id
-        for param in ref_model.parameters():
-            param.requires_grad = False
-        ref_model.eval()
-        print("Models loaded.")
-    except Exception as e:
-        print(f"Error loading models: {e}")
-        return
+    # --- Load Reference Model ---
+    ref_model_kwargs = model_kwargs.copy()
+    ref_model_kwargs.pop("quantization_config",
+                         None)  # No quantization for ref model
+    ref_model = AutoModelForCausalLM.from_pretrained(cfg.model.name,
+                                                     **ref_model_kwargs)
+    ref_model.to(device)
+    if ref_model.config.pad_token_id is None:
+        ref_model.config.pad_token_id = tokenizer.pad_token_id
+    # Freeze reference model
+    for param in ref_model.parameters():
+        param.requires_grad = False
+    ref_model.eval()
+    print("Reference model loaded and frozen.")
 
-    # --- Load Dataset & Preprocess ---
+    return actor_model, ref_model, tokenizer
+
+
+def load_and_preprocess_dataset(cfg: DictConfig,
+                                tokenizer: PreTrainedTokenizerBase) -> Dataset:
+    """Loads the dataset and preprocesses it."""
     print(f"Loading dataset: {cfg.dataset.name}")
-    dataset = load_dataset(cfg.dataset.name, cfg.dataset.split)
+    try:
+        dataset = load_dataset(cfg.dataset.name,
+                               cfg.dataset.get("config"),
+                               split=cfg.dataset.split)
+    except Exception as e:
+        print(f"Error loading dataset '{cfg.dataset.name}': {e}")
+        raise  # Re-raise critical error
 
-    def preprocess_dataset(example):
-        example["prompt"] = cfg.dataset.prompt_format.format(
-            question=example["question"])
+    # --- Subsetting ---
+    num_samples = cfg.training.get("num_samples")
+    if num_samples is not None and num_samples > 0 and num_samples <= len(
+            dataset):
+        print(f"Subsetting dataset to {num_samples} samples.")
+        dataset = dataset.select(range(num_samples))
+
+    # --- Preprocessing Function ---
+    def preprocess_function(example):
+        try:
+            example["prompt"] = cfg.dataset.prompt_format.format(
+                question=example["question"])
+            example["ground_truth_answer"] = example["answer"].split(
+                "####")[-1].strip()
+        except KeyError as e:
+            print(
+                f"Error processing example: Missing key {e}. Skipping prompt/answer."
+            )
+            example["prompt"] = ""
+            example["ground_truth_answer"] = ""
+        # Tokenize prompt only (no padding here)
         tokenized_prompt = tokenizer(example["prompt"],
                                      max_length=cfg.dataset.max_prompt_length,
                                      truncation=True,
-                                     padding=False,
-                                     return_tensors=None)
+                                     padding=False)
         example["input_ids"] = tokenized_prompt["input_ids"]
         example["attention_mask"] = tokenized_prompt["attention_mask"]
-        example["ground_truth_answer"] = example["answer"].split(
-            "####")[-1].strip()
         return example
 
-    tokenized_dataset = dataset.map(preprocess_dataset,
-                                    remove_columns=dataset.column_names)
-    tokenized_dataset.set_format(type="torch")
-    print(f"Dataset preprocessed. Samples: {len(tokenized_dataset)}")
+    # --- Apply Preprocessing ---
+    try:
+        processed_dataset = dataset.map(
+            preprocess_function,
+            remove_columns=dataset.column_names  # Keep only processed columns
+        )
+        processed_dataset.set_format(type="torch")  # Set format for DataLoader
+        print(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
+        return processed_dataset
+    except Exception as e:
+        print(f"Error during dataset mapping: {e}")
+        raise  # Re-raise critical error
 
+
+def setup_optimizer(cfg: DictConfig,
+                    model: nn.Module) -> torch.optim.Optimizer:
+    """Sets up the optimizer based on configuration."""
+    use_8bit = cfg.ppo.get("use_8bit_adam", False)
+    lr = cfg.ppo.learning_rate
+
+    if use_8bit and bnb_available and isinstance(
+            next(model.parameters()).device, torch.device) and next(
+                model.parameters()).device.type == "cuda":
+        # Check for quantization conflict (optional, depends on specific use case)
+        is_quantized = hasattr(model, 'quantization_config') and \
+                       (model.quantization_config.load_in_8bit or model.quantization_config.load_in_4bit)
+        if is_quantized:
+            print(
+                "Warning: Using 8-bit AdamW with a quantized model. Consider standard AdamW."
+            )
+            optimizer = AdamW(model.parameters(), lr=lr)
+        else:
+            print("Using 8-bit AdamW Optimizer (bitsandbytes)")
+            optimizer = bnb_optim.AdamW8bit(model.parameters(), lr=lr)
+    else:
+        if use_8bit:
+            print(
+                "Info: 8-bit Adam not used (requirements not met). Using standard AdamW."
+            )
+        else:
+            print("Using standard AdamW Optimizer")
+        optimizer = AdamW(model.parameters(), lr=lr)
+    return optimizer
+
+
+def create_generation_config(
+        cfg: DictConfig,
+        tokenizer: PreTrainedTokenizerBase) -> GenerationConfig:
+    """Creates the GenerationConfig object."""
+    return GenerationConfig(max_new_tokens=cfg.generation.max_new_tokens,
+                            min_new_tokens=cfg.generation.min_new_tokens,
+                            temperature=cfg.generation.temperature,
+                            top_k=cfg.generation.top_k,
+                            top_p=cfg.generation.top_p,
+                            do_sample=cfg.generation.do_sample,
+                            pad_token_id=tokenizer.pad_token_id)
+
+
+def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase,
+               save_path: str):
+    """Saves the model and tokenizer."""
+    print(f"Saving model checkpoint to {save_path}...")
+    os.makedirs(save_path, exist_ok=True)
+    try:
+        # Handle potential model wrappers (like ActorModelWithValueHead)
+        unwrapped_model = getattr(model, "base_model", model)
+        # Handle PEFT model saving if applicable in the future
+        # if hasattr(unwrapped_model, 'save_pretrained'):
+        unwrapped_model.save_pretrained(save_path)
+        tokenizer.save_pretrained(save_path)
+        print(f"Model and tokenizer saved.")
+    except Exception as e:
+        print(f"Error saving model: {e}")
+
+
+# ==============================================================================
+# == 7. Main Training Orchestration
+# ==============================================================================
+
+
+def train(cfg: DictConfig):
+    """Main PPO training loop."""
+    # --- 1. Initial Setup ---
+    device, output_dir = setup_training(cfg)
+    # Save final config after setup
+    try:
+        OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
+    except Exception as e:
+        print(f"Error saving final config: {e}")
+
+    # --- 2. Load Models and Tokenizer ---
+    try:
+        actor_model, ref_model, tokenizer = load_models_and_tokenizer(
+            cfg, device)
+    except Exception as e:
+        print(f"Failed to load models/tokenizer: {e}")
+        return  # Cannot proceed
+
+    # --- 3. Load and Preprocess Dataset ---
+    try:
+        processed_dataset = load_and_preprocess_dataset(cfg, tokenizer)
+    except Exception as e:
+        print(f"Failed to load/preprocess dataset: {e}")
+        return  # Cannot proceed
+
+    # --- 4. Setup Optimizer ---
+    optimizer = setup_optimizer(cfg, actor_model)
+
+    # --- 5. Generation Config ---
+    gen_config = create_generation_config(cfg, tokenizer)
+
+    # --- 6. Collate Function for DataLoader ---
     def collate_fn(batch):
         input_ids = [item['input_ids'] for item in batch]
-        padded_inputs = tokenizer.pad({"input_ids": input_ids},
-                                      padding='longest',
-                                      return_tensors="pt",
-                                      return_attention_mask=True)
+        try:
+            # Use tokenizer.pad (respects tokenizer.padding_side)
+            padded_inputs = tokenizer.pad({"input_ids": input_ids},
+                                          padding='longest',
+                                          return_tensors="pt",
+                                          return_attention_mask=True)
+        except Exception as e:
+            print(f"Error during tokenizer.pad in collate_fn: {e}")
+            return None  # Signal error to dataloader loop
         ground_truths = [item['ground_truth_answer'] for item in batch]
         return {
             "prompt_input_ids": padded_inputs["input_ids"],
@@ -666,164 +1030,149 @@ def train(cfg: DictConfig):
             "ground_truth_answers": ground_truths
         }
 
-    # --- Optimizer ---
-    use_8bit = cfg.ppo.get("use_8bit_adam", False)
-    if use_8bit and bnb_available and device.type == "cuda":
-        print("Using 8-bit AdamW Optimizer (bitsandbytes)")
-        optimizer = bnb_optim.AdamW8bit(actor_model.parameters(),
-                                        lr=cfg.ppo.learning_rate)
-    else:
-        if use_8bit:
-            print(
-                "Warning: 8-bit Adam not used (bitsandbytes unavailable or not on CUDA). Using standard AdamW."
-            )
-        else:
-            print("Using standard AdamW Optimizer")
-        optimizer = AdamW(actor_model.parameters(), lr=cfg.ppo.learning_rate)
-
-    # --- Generation Config ---
-    gen_config = GenerationConfig(max_new_tokens=cfg.generation.max_new_tokens,
-                                  min_new_tokens=cfg.generation.min_new_tokens,
-                                  temperature=cfg.generation.temperature,
-                                  top_k=cfg.generation.top_k,
-                                  top_p=cfg.generation.top_p,
-                                  do_sample=cfg.generation.do_sample)
-
-    # --- Main Training Loop ---
-    print("--- Starting PPO Training ---")  # Changed title slightly
+    # --- 7. Main PPO Loop ---
+    print("\n--- Starting PPO Training ---")
     for ppo_step in range(cfg.training.total_ppo_steps):
-        print(f"\nPPO Step {ppo_step + 1}/{cfg.training.total_ppo_steps}")
+        print(
+            f"\n===== PPO Step {ppo_step + 1}/{cfg.training.total_ppo_steps} ====="
+        )
+
+        # --- Phase 1: Rollout ---
         print("Phase 1: Generating Rollouts...")
-        dataloader = torch.utils.data.DataLoader(tokenized_dataset,
-                                                 batch_size=cfg.ppo.batch_size,
-                                                 shuffle=True,
-                                                 collate_fn=collate_fn)
-        rollout_buffer = perform_rollouts(actor_model, ref_model, tokenizer,
-                                          dataloader, gen_config, device)
-        avg_reward = 0.0
-        num_rollouts = 0
-        if rollout_buffer and "rewards" in rollout_buffer and rollout_buffer[
-                "rewards"].numel() > 0:
-            num_rollouts = rollout_buffer["rewards"].shape[0]
-            avg_reward = rollout_buffer["rewards"].mean().item()
+        prompt_dataloader = DataLoader(processed_dataset.shuffle(
+            seed=cfg.training.seed).select(range(cfg.ppo.rollout_samples)),
+                                       batch_size=cfg.ppo.batch_size,
+                                       shuffle=False,
+                                       collate_fn=collate_fn)
+        try:
+            rollout_buffer = perform_rollouts(actor_model, ref_model,
+                                              tokenizer, prompt_dataloader,
+                                              gen_config, device)
+        except Exception as e:
+            print(f"Error during rollout phase: {e}")
+            import traceback
+            traceback.print_exc()
+            continue  # Skip to next PPO step
+
+        # Validate rollout buffer
+        if not rollout_buffer or "rewards" not in rollout_buffer or \
+           not isinstance(rollout_buffer["rewards"], torch.Tensor) or \
+           rollout_buffer["rewards"].numel() == 0:
             print(
-                f"Rollout complete ({num_rollouts} samples). Average reward: {avg_reward:.4f}"
-            )
-        else:
-            print("Rollout buffer seems empty or invalid after generation.")
+                "Warning: Invalid rollout buffer generated. Skipping update.")
+            continue
 
+        avg_reward = rollout_buffer["rewards"].mean().item()
+        num_rollouts = rollout_buffer["rewards"].shape[0]
+        print(
+            f"Rollout complete ({num_rollouts} samples). Average reward: {avg_reward:.4f}"
+        )
+
+        # --- Phase 2: Update ---
         print("Phase 2: Performing PPO Updates...")
-        is_buffer_valid = (
-            rollout_buffer and num_rollouts > 0
-            and all(k in rollout_buffer
-                    for k in ["response_input_ids", "logprobs", "values"])
-            and rollout_buffer["response_input_ids"].numel() > 0
-            and rollout_buffer["response_input_ids"].shape[1] > 0)
-        if is_buffer_valid:
-            metrics = perform_ppo_update(actor_model, optimizer,
-                                         rollout_buffer, cfg, device)
-            if metrics and (ppo_step + 1) % cfg.training.log_interval == 0:
-                print(f"PPO Step {ppo_step+1} Metrics (Avg over Epoch):")
-                log_str = " | ".join(
-                    [f"{k}: {v:.4f}" for k, v in metrics.items()])
-                print(log_str)
-                print(f"  Reward (mean from rollout): {avg_reward:.4f}")
-            elif not metrics:
-                print("Update function returned empty metrics.")
+        try:
+            metrics = perform_ppo_updates(actor_model, optimizer,
+                                          rollout_buffer, cfg, device)
+        except Exception as e:
+            print(f"Error during update phase: {e}")
+            import traceback
+            traceback.print_exc()
+            metrics = {}  # Ensure metrics exists
+
+        # Log metrics
+        if metrics:
+            log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+            print(f"Update Metrics (Avg over Epoch): {log_str}")
+            print(f"  Rollout Reward (for this step): {avg_reward:.4f}")
         else:
-            print("Skipping update step because rollout buffer is invalid.")
+            print("PPO update skipped or failed.")
 
+        # --- Phase 3: Save Checkpoint ---
         if (ppo_step + 1) % cfg.training.save_interval == 0:
-            step_output_dir = os.path.join(output_dir, f"step_{ppo_step + 1}")
-            print(f"Saving model checkpoint to {step_output_dir}...")
-            os.makedirs(step_output_dir, exist_ok=True)
-            try:
-                actor_model.save_pretrained(step_output_dir)
-                tokenizer.save_pretrained(step_output_dir)
-                print(f"Model saved.")
-            except Exception as e:
-                print(f"Error saving model: {e}")
+            save_model(actor_model, tokenizer,
+                       os.path.join(output_dir, f"step_{ppo_step + 1}"))
 
-    print("--- PPO Training Finished ---")
-    final_output_dir = os.path.join(output_dir, "final")
-    print(f"Saving final model to {final_output_dir}...")
-    os.makedirs(final_output_dir, exist_ok=True)
-    try:
-        actor_model.save_pretrained(final_output_dir)
-        tokenizer.save_pretrained(final_output_dir)
-        print(f"Final model saved.")
-    except Exception as e:
-        print(f"Error saving final model: {e}")
+    # --- 8. Final Save ---
+    print("\n--- PPO Training Finished ---")
+    save_model(actor_model, tokenizer, os.path.join(output_dir, "final"))
 
 
-# --- Entry Point ---
-def main_cli():
-    """Handles command-line argument parsing and initiates training."""
-    # (Implementation remains the same as previous response)
-    parser = argparse.ArgumentParser(description="PPO RL Tutorial Trainer")
-    parser.add_argument(
-        "--config-path",
-        type=str,
-        default="configs",
-        help="Path to the config directory relative to project root")
-    parser.add_argument(
-        "--config-name",
-        type=str,
-        default="config.yaml",
-        help="Name of the config file (e.g., config.yaml, config_debug.yaml)")
-    parser.add_argument(
-        "overrides",
-        nargs="*",
-        help="Any key=value arguments to override config values "
-        "(e.g., training.device=cuda:0 ppo.learning_rate=1e-5)",
-    )
+# ==============================================================================
+# == 8. Command-Line Interface Logic
+# ==============================================================================
+
+
+def load_config_with_cli_overrides(
+        default_config_path: str = "configs",
+        default_config_name: str = "config.yaml") -> DictConfig:
+    """Loads OmegaConf config, handling defaults and CLI overrides."""
+    parser = argparse.ArgumentParser(description="PPO RL Trainer (Refactored)")
+    parser.add_argument("--config-path", type=str, default=default_config_path)
+    parser.add_argument("--config-name", type=str, default=default_config_name)
+    parser.add_argument("overrides",
+                        nargs="*",
+                        help="Key=value config overrides")
     args = parser.parse_args()
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
+    project_root = os.path.dirname(script_dir)  # Assumes script is in src/
     config_dir_abs = os.path.join(project_root, args.config_path)
+
     conf_path = os.path.join(config_dir_abs, args.config_name)
+    if not os.path.exists(conf_path):  # Fallback to relative path
+        conf_path = os.path.join(args.config_path, args.config_name)
+
     if not os.path.exists(conf_path):
-        alt_conf_path = os.path.join(args.config_path, args.config_name)
-        conf_path = alt_conf_path if os.path.exists(alt_conf_path) else None
-    if conf_path is None or not os.path.exists(conf_path):
-        print(f"Error: Config file not found at specified/relative paths.")
+        print(
+            f"Error: Config file '{args.config_name}' not found in '{config_dir_abs}' or '{args.config_path}'."
+        )
         sys.exit(1)
+
     print(f"Loading config from: {conf_path}")
     cfg = OmegaConf.load(conf_path)
-    if 'defaults' in cfg and isinstance(cfg.defaults, list) and cfg.defaults:
-        base_conf_name = cfg.defaults[0] + ".yaml"
-        base_conf_path_abs = os.path.join(config_dir_abs, base_conf_name)
-        base_conf_path_rel = os.path.join(args.config_path, base_conf_name)
-        base_path_to_load = base_conf_path_abs if os.path.exists(
-            base_conf_path_abs) else base_conf_path_rel if os.path.exists(
-                base_conf_path_rel) else None
-        if base_path_to_load:
-            print(f"Loading base config from: {base_path_to_load}")
-            base_cfg = OmegaConf.load(base_path_to_load)
-            cfg = OmegaConf.merge(base_cfg, cfg)
+
+    # Handle 'defaults' for base config merging (simplified)
+    if 'defaults' in cfg and cfg.defaults:
+        base_conf_name = cfg.defaults[
+            0] + ".yaml"  # Assumes first default is base
+        base_conf_path = os.path.join(config_dir_abs, base_conf_name)
+        if not os.path.exists(base_conf_path):
+            base_conf_path = os.path.join(args.config_path,
+                                          base_conf_name)  # Fallback
+
+        if os.path.exists(base_conf_path):
+            print(f"Loading base config from: {base_conf_path}")
+            base_cfg = OmegaConf.load(base_conf_path)
+            cfg = OmegaConf.merge(base_cfg, cfg)  # Merge base first
         else:
-            print(f"Warning: Base config {base_conf_name} not found.")
-        if 'defaults' in cfg:
-            try:
-                OmegaConf.set_struct(cfg, False)
-                cfg.pop('defaults')
-                OmegaConf.set_struct(cfg, True)
-            except Exception as e_pop:
-                print(f"Note: Could not pop 'defaults' key: {e_pop}")
+            print(f"Warning: Base config '{base_conf_name}' not found.")
+        # Clean up defaults key if desired
+        OmegaConf.set_struct(cfg, False)
+        cfg.pop('defaults', None)
+        OmegaConf.set_struct(cfg, True)
+
+    # Apply CLI overrides
     if args.overrides:
         print(f"Applying overrides: {args.overrides}")
         cli_conf = OmegaConf.from_cli(args.overrides)
         cfg = OmegaConf.merge(cfg, cli_conf)
-        print("--------- Final Configuration ---------")
-        try:
-            OmegaConf.resolve(cfg)
-            print(OmegaConf.to_yaml(cfg))
-        except Exception as e_resolve:
-            print(f"Error resolving config: {e_resolve}")
-            print(OmegaConf.to_yaml(cfg, resolve=False))
-    print("---------------------------------------")
-    train(cfg)
 
+    # Resolve interpolations
+    try:
+        OmegaConf.resolve(cfg)
+    except Exception as e:
+        print(f"Warning: Config resolution error: {e}")
+
+    print("--------- Final Configuration ---------")
+    print(OmegaConf.to_yaml(cfg, resolve=True))  # Print resolved config
+    print("---------------------------------------")
+    return cfg
+
+
+# ==============================================================================
+# == 9. Entry Point
+# ==============================================================================
 
 if __name__ == "__main__":
-    main_cli()
+    config = load_config_with_cli_overrides()
+    train(config)

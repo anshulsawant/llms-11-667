@@ -9,7 +9,6 @@ model:
   tokenizer_name: "sbintuitions/tiny-lm-chat"
   trust_remote_code: false # Likely not needed for this model based on HF card
   torch_dtype: "float32"
-  
 # Adjust PPO params for faster testing on CPU
 ppo:
   learning_rate: 5.0e-5 # Can use higher LR for smaller models usually
@@ -17,6 +16,7 @@ ppo:
   mini_batch_size: 1
   gradient_accumulation_steps: 1
   use_8bit_adam: true
+  rollout_samples: 4
 
 # Adjust Training Control for fast debugging runs
 training:
@@ -25,6 +25,7 @@ training:
   save_interval: 2
   output_dir: "outputs/ppo_gsm8k_debug_tiny"
   device: "cpu"       # Force CPU execution
+  num_samples: 8
 
 # Optional: Adjust generation parameters if needed (defaults might be fine)
 # generation:

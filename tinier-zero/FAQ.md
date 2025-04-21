@@ -95,3 +95,104 @@ Training two interdependent components like the policy (Actor) and the value fun
 		* **Accurate Statistics:** When calculating metrics like approximate KL divergence or policy/value clipping fractions, including non-response tokens would skew the results.
 
 	Therefore, using the `response_mask` to effectively mask out non-response tokens during the loss calculations in the PPO update phase is a crucial and necessary step for correctly training the language model policy with reinforcement learning.
+
+6. Why do we need value for each token?
+
+	That's a very reasonable question! It might seem counter-intuitive at first why we need a value estimate for every single token in the sequence generated during a rollout. Here's the breakdown of why this is the standard and generally necessary approach in PPO for language models:
+
+	Estimating Future Rewards from Each Step: The core idea of the value function (V(s)) in Reinforcement Learning is to estimate the total expected future reward starting from a given state s. In sequence generation, each token added creates a new state. PPO needs to know the estimated value at each step (i.e., after each token is generated) to calculate how advantageous it was to generate that specific token compared to the average outcome from that state.
+
+	Calculating Advantages (Especially GAE): PPO relies heavily on calculating the "Advantage" for each action (token generated). Common methods like Generalized Advantage Estimation (GAE) compute advantages by looking at the difference between actual rewards received and the predicted values at each time step. The formula involves terms like r_t + gamma * V(s_{t+1}) - V(s_t)`, which explicitly requires having V(s_t) (the value estimate after token t) and V(s_{t+1}) (the value estimate after token t+1). Without per-token values, you cannot compute these crucial TD errors that drive learning.
+
+	Temporal Credit Assignment: Having a value for each token allows the algorithm to better assign "credit" or "blame" to individual token choices within a sequence. If a sequence ultimately gets a high reward, the per-token value estimates help propagate that reward signal backward, reinforcing the specific good choices made along the way. A single value for the entire sequence makes it much harder to determine which specific tokens contributed most to the final outcome.
+
+	Compatibility with PPO Implementations (like TRL): Libraries and standard implementations of PPO for sequence tasks (like Hugging Face TRL's PPOTrainer) are designed around this per-token value paradigm. Their internal logic for calculating advantages, returns, and the final PPO loss expects the value function (from your actor model) to output a value for each token in the input sequence. This is why the previous IndexError occurred – the trainer code expected a tensor of shape (batch_size, sequence_length) to perform its calculations.
+
+	Regarding "subsetting": The slicing you saw (values[:, prompt_len - 1:...]) happens after the model produces per-token values. It's often used during the loss calculation phase to specifically align the rewards and advantages with the generated response part of the sequence, ignoring the prompt part. But to do this alignment correctly and calculate advantages, the model first needs to provide the value for each step.
+
+	In short, while a single value per sequence seems simpler, the per-token value approach is fundamental to how PPO learns effectively by estimating advantages and assigning credit at each step of the sequence generation process. The code in the Canvas now correctly implements this per-token value calculation.
+
+7. Explain the GAE computation to me in more detail including the concept of values, rewards and why GAE is computed in reverse.
+
+	Core Concepts
+	State (s_t): In this context, the state at time t represents the sequence of tokens generated up to that point (prompt + response tokens 0 to t-1).
+
+	Action (a_t): The action taken at time t is the generation of the specific token response_token_t.
+
+	Value Function (V(s_t)):
+
+	This is what the "value head" of your ActorModelWithValueHead tries to learn.
+
+	V(s_t) is an estimate of the total expected future discounted reward starting from state s_t. Think of it as the model's prediction of "how good is it to be in this state s_t?" in terms of future rewards.
+
+	In your code, the values tensor passed into compute_gae_advantages contains these estimates (V(s_0), V(s_1), ..., V(s_{T-1})) for the states corresponding to the response sequence, as predicted by the model during the rollout phase.
+
+	Reward (r_t):
+
+	This is the immediate feedback received after taking action a_t (generating token t) and transitioning to state s_{t+1}.
+
+	In many RL problems, rewards are given at each step. However, in RLHF for LLMs, the reward is often sparse: you only get a significant reward signal based on the entire completed sequence.
+
+	In your script, this is handled by:
+
+	final_rewards: The reward based on the complete generated text (e.g., 1.0 if the math answer is correct, 0 otherwise). This reward is conceptually assigned after the last token T-1 is generated.
+
+	kl_penalties: A penalty applied at each step t to discourage the actor model from deviating too much from the reference model. kl_penalty_t = kl_coeff * (logprob_actor(a_t|s_t) - logprob_ref(a_t|s_t)).
+
+	token_level_rewards: The script constructs this internal reward signal. It's mostly zero, except the final_reward is assigned to the very last actual token step (T-1), and then the kl_penalty is subtracted from every step's reward. So, r_t = -kl_penalty_t for most t, and r_{T-1} = final_reward - kl_penalty_{T-1}.
+
+	Advantage Estimation: Why GAE?
+	The goal of PPO is to increase the probability of actions that lead to better-than-expected outcomes. We need a way to estimate this "better-than-expected" value, which is the Advantage (A(s_t, a_t)).
+
+	Simple Idea (TD Error): A basic estimate is the Temporal Difference (TD) error:
+	delta_t = r_t + gamma * V(s_{t+1}) - V(s_t)
+	This measures the difference between the reward we got (r_t) plus the discounted value of the next state (gamma * V(s_{t+1})) and what we expected from the current state (V(s_t)). It's a one-step lookahead advantage. It has low variance (because it relies heavily on the learned value function V) but can be biased if V is inaccurate.
+
+	Another Idea (Monte Carlo): We could calculate the actual full discounted return G_t = r_t + gamma*r_{t+1} + gamma^2*r_{t+2} + ... from step t onwards and compare it to the baseline V(s_t): A_t = G_t - V(s_t). This is unbiased but can have very high variance, making learning unstable.
+
+	GAE (The Compromise): Generalized Advantage Estimation combines these ideas using a parameter lambda (lam in the code) to balance bias and variance. The GAE formula is essentially a geometrically decaying sum of TD errors:
+	A_t^{GAE} = delta_t + (gamma * lambda) * delta_{t+1} + (gamma * lambda)^2 * delta_{t+2} + ...
+
+	If lambda = 0, A_t^{GAE} = delta_t (TD Error).
+
+	If lambda = 1, A_t^{GAE} approximates the Monte Carlo advantage G_t - V(s_t).
+
+	Values between 0 and 1 interpolate, often providing a good balance (lambda=0.95 is common).
+
+	Why Compute in Reverse?
+	Calculating the GAE sum directly using the formula above involves looking ahead at all future TD errors for each time step t. This would be inefficient.
+
+	Instead, we can use a recursive relationship. Notice that:
+	A_t = delta_t + (gamma * lambda) * [ delta_{t+1} + (gamma * lambda) * delta_{t+2} + ... ]
+	A_t = delta_t + (gamma * lambda) * A_{t+1}
+
+	This recursive formula shows that the advantage at step t (A_t) depends on the TD error at step t (delta_t) and the advantage at the next step t+1 (A_{t+1}).
+
+	To compute all advantages A_0, A_1, ..., A_{T-1} for a sequence of length T:
+
+	We need A_T. We assume the advantage after the last step is 0.
+
+	We can then calculate A_{T-1} using delta_{T-1} and A_T.
+
+	Knowing A_{T-1}, we can calculate A_{T-2} using delta_{T-2} and A_{T-1}.
+
+	We continue this process backward until we reach A_0.
+
+	This is why the implementation iterates in reverse (for t in reversed(range(response_length)):). It starts from the end, calculates delta_t and A_t (stored as last_gae_lam for the next iteration), and uses the previously calculated A_{t+1} (which is last_gae_lam before the update in the current iteration) to compute the current advantage. The next_mask is crucial in the recursive step delta + gamma * lam * last_gae_lam * next_mask to ensure that if step t+1 was padding, the contribution from A_{t+1} is zeroed out.
+
+	Finally, the returns needed for the value function update are calculated simply as returns_t = A_t + V(s_t).
+
+8. Why does the monte carlo method have high variance?
+
+	The high variance of the Monte Carlo (MC) method for estimating returns (G_t) or advantages (G_t - V(s_t)) stems from the fact that G_t incorporates all rewards from the current step t until the very end of the episode or rollout.
+
+	Here's why that leads to high variance:
+
+	Dependence on the Entire Future Trajectory: The value of G_t depends not just on the immediate reward r_t, but on the entire sequence of actions taken (a_t, a_{t+1}, a_{t+2}, ...) and the resulting rewards (r_t, r_{t+1}, r_{t+2}, ...) for the rest of the episode.
+	Stochasticity in Actions and Transitions: Both the policy (which selects actions) and the environment (which determines transitions and rewards) can be stochastic (random).
+	Even from the same state s_k, the policy might choose different actions a_k on different rollouts.
+	Even with the same state-action pair (s_k, a_k), the environment might transition to different next states s_{k+1} or give different rewards r_k.
+	Compounding Randomness: Each step taken after step t introduces a potential point of randomness. A single different action or transition early in the trajectory (t+1, t+2, etc.) can lead the agent down a completely different path, resulting in a vastly different sequence of subsequent rewards.
+	Summation Accumulates Variance: Since G_t is a sum of all these potentially random future rewards, the variance from each step accumulates. The longer the trajectory from step t to the end, the more random events can influence the outcome, and the higher the variance of the sum G_t will be. Imagine trying to predict the exact score of a basketball game after the first minute – many random events (shots made/missed, fouls, turnovers) will happen, making the final score highly variable.
+	Contrast with TD Error: The TD error (delta_t = r_t + gamma * V(s_{t+1}) - V(s_t)) only depends on the immediate reward r_t and the estimated value V(s_{t+1}). It doesn't rely on the actual outcomes of all future steps. While V(s_{t+1}) might be biased, it's usually much less variable than the actual sum of all future rewards (G_{t+1}). This makes delta_t (and GAE with low lambda) have lower variance.
+	In essence, the Monte Carlo return G_t captures the full, unbiased outcome of a specific trajectory, but because that trajectory is subject to the accumulated randomness of potentially many future steps, the value of G_t can vary wildly between different rollouts starting from the same state s_t. This high variance makes the learning signal noisy and potentially unstable.
