@@ -1,8 +1,8 @@
 # configs/config.yaml
 # Model & Tokenizer Configuration
 model:
-  name: "Qwen/Qwen1.5-1.8B-Chat"
-  tokenizer_name: "Qwen/Qwen1.5-1.8B-Chat"
+  name: "google/gemma-2b-it"
+  tokenizer_name: "google/gemma-2b-it"
   trust_remote_code: true # Needed for Qwen
   torch_dtype: "bfloat32"
 

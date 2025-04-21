@@ -74,15 +74,33 @@ def masked_whiten(tensor: torch.Tensor, mask: Optional[torch.Tensor], shift_mean
     return torch.where(mask, whitened, torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
 
 def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
-    """Extracts the numerical answer from the #### format."""
-    solution = re.search(r"####\s*([-+]?\s*[\d\.\,]+)", solution_str)
-    if solution:
-        return solution.group(1).replace(',', '').replace(' ', '')
-    else: # Fallback: try finding the last number
-        answer = re.findall(r"([-+]?\s*[\d\.\,]+)", solution_str)
-        if answer:
-            final_answer_str = answer[-1].replace(',', '').replace(' ', '')
-            try: # Validate if it's a number
+    """Extracts the numerical answer from the #### format.
+
+    Does not handle scientific notation.
+    """
+    # Use strict method first: Search for #### followed by a potential number
+    # The regex captures digits, optional sign, dots, and commas.
+    solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
+
+    if solution_match:
+        # Extract the captured group (potential number string)
+        potential_answer_str = solution_match.group(1).replace(',', '').replace(' ', '')
+        # --- ADDED VALIDATION ---
+        # Check if the extracted string is actually a valid number
+        try:
+            float(potential_answer_str)
+            return potential_answer_str # Return only if it's a valid float
+        except ValueError:
+            return None # Not a valid number, return None
+        # --- END ADDED VALIDATION ---
+    else:
+        # Fallback: Try finding the *last* potential number string in the whole text
+        answer_list = re.findall(r"([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
+        if answer_list:
+            # Get the last match
+            final_answer_str = answer_list[-1].replace(',', '').replace(' ', '')
+            # Validate if the last match is a number
+            try:
                 float(final_answer_str)
                 return final_answer_str
             except ValueError: return None
@@ -106,29 +124,12 @@ def pad_and_collate_tensors(
     Pads tensors in a list to the maximum length of the second dimension
     and concatenates them along the first dimension.
 
-    Assumes input tensors are at least 2D.
+    Assumes input tensors are 2D.
     """
-    if not tensor_list:
-        return torch.empty(0) # Or determine appropriate shape based on context
-
-    if not all(isinstance(t, torch.Tensor) for t in tensor_list):
-         raise TypeError("All elements in tensor_list must be PyTorch tensors.")
-
-    if tensor_list[0].dim() < 2:
-        # If tensors are 1D (like rewards), just concatenate
-        if all(t.dim() == 1 for t in tensor_list):
-            return torch.cat(tensor_list, dim=0)
-        else:
-            raise ValueError("Cannot collate tensors with mixed dimensions < 2.")
-
     # Find max length in the second dimension (sequence length)
-    max_len = 0
-    for t in tensor_list:
-        if t.dim() < 2:
-             raise ValueError(f"Tensor with shape {t.shape} has fewer than 2 dimensions.")
-        max_len = max(max_len, t.shape[1])
-
-    if max_len == 0: # Handle cases where all sequences have length 0
+    max_len = max([t.shape[1] for t in tensor_list])
+    
+    if max_len == 0:  # Handle cases where all sequences have length 0
         total_batch_size = sum(t.shape[0] for t in tensor_list)
         # Return shape (TotalB, 0, ...) matching original dims > 1
         original_shape = tensor_list[0].shape
@@ -141,25 +142,15 @@ def pad_and_collate_tensors(
         current_len = t.shape[1]
         padding_needed = max_len - current_len
         if padding_needed > 0:
-            # Pad only the second dimension (dim=1) on the right
-            num_dims = t.dim()
-            # F.pad format: (pad_last_dim_left, pad_last_dim_right, pad_next_to_last_left, ...)
-            pad_tuple = [0] * (2 * num_dims)
-            pad_idx_right = 2 * (num_dims - 1 - 1) + 1 # Index for right padding of dim 1
-            pad_tuple[pad_idx_right] = padding_needed
-            padded_t = F.pad(t, tuple(pad_tuple), mode='constant', value=padding_value)
-            padded_list.append(padded_t)
-        else:
-            padded_list.append(t) # No padding needed or already max length
+            pad_tuple = (0, padding_needed, 0, 0)
+            t = F.pad(t,
+                             tuple(pad_tuple),
+                             mode='constant',
+                             value=padding_value)
+        padded_list.append(t)  # No padding needed or already max length
 
     # Concatenate the padded tensors along the batch dimension (dim=0)
-    try:
-        return torch.cat(padded_list, dim=0)
-    except Exception as e:
-        print(f"Error during final concatenation: {e}")
-        # Print shapes for debugging
-        for i, p_t in enumerate(padded_list): print(f"  Tensor {i} shape: {p_t.shape}")
-        raise # Re-raise the exception after printing info
+    return torch.cat(padded_list, dim=0)
 
 
 # ==============================================================================

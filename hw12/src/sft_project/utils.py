@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__) # Use logger for potential warnings/errors 
 
 # --- Configuration Loading ---
 
-def load_config(override_config_path: str, base_config_path: str = "config.yaml") -> DictConfig:
+def load_config(override_config_path: str, base_config_path: str = "configs/config.yaml") -> DictConfig:
     """Loads base config and merges override config."""
     try:
         base_cfg = OmegaConf.load(base_config_path)

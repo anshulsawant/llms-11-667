@@ -283,7 +283,6 @@ def compute_gae_advantages(
             # last_gae_lam holds A_{t+1} from previous iteration
             # --- MODIFIED LINE ---
             last_gae_lam = delta + gamma * lam * last_gae_lam * next_mask # Use next_mask here
-            print(t, delta, last_gae_lam)
             # --- END MODIFIED LINE ---
             advantages_reversed.append(last_gae_lam)
 
@@ -291,7 +290,6 @@ def compute_gae_advantages(
 
         # Reverse the list and stack into a tensor
         advantages = torch.stack(advantages_reversed[::-1], dim=1)
-        print(advantages)
         # Returns = Advantages + Values (Return G_t = A_t + V(s_t))
         returns = advantages + values
 
