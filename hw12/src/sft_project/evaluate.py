@@ -49,7 +49,7 @@ def parse_arguments():
     """Parses command-line arguments for evaluation."""
     parser = argparse.ArgumentParser(description="Evaluate a base or fine-tuned model using config.")
     parser.add_argument("--config_path", type=str, required=True, help="Path to the override configuration YAML file.")
-    parser.add_argument("--base_config_path", type=str, default="config.yaml", help="Path to the base configuration YAML file.")
+    parser.add_argument("--base_config_path", type=str, default="configs/config.yaml", help="Path to the base configuration YAML file.")
     parser.add_argument("--use_base_model", action="store_true", help="Force evaluation using the base model specified in the config, ignoring checkpoints.")
     # Removed CLI overrides for dataset params, use config only
     return parser.parse_args()
