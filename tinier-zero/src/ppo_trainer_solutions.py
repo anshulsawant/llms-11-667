@@ -854,7 +854,14 @@ def load_models_and_tokenizer(
     if actor_model.config.pad_token_id is None:
         actor_model.config.pad_token_id = tokenizer.pad_token_id
     logging.info("Actor model loaded.")
-
+    if cfg.training.get("gradient_checkpointing", False):
+        try:
+            # Enable on the base model wrapped by ActorModelWithValueHead
+            actor_model.base_model.gradient_checkpointing_enable()
+            print("Gradient checkpointing enabled for actor model.")
+        except AttributeError:
+             print("Warning: Could not enable gradient checkpointing. Method not found on base_model.")
+ 
     # --- Load Reference Model ---
     ref_model_kwargs = model_kwargs.copy()
     ref_model_kwargs.pop("quantization_config",
