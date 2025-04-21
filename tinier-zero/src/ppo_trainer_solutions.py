@@ -4,6 +4,7 @@
 Refactored PPO Trainer script for pedagogical purposes.
 Focuses on modularity and clarity over excessive defensive programming.
 """
+import wandb
 import logging
 logging.basicConfig(
     level=logging.INFO,
@@ -264,11 +265,11 @@ def compute_gae_advantages(
             # Ensure indices used for indexing final_rewards are valid
             rewards_to_apply = final_rewards[valid_indices]
             indices_to_update = last_token_indices[valid_indices]
+            rewards_to_apply.to(token_level_rewards.dtype)
             # Scatter reward to the step *before* the terminal state
             token_level_rewards.scatter_(
                 1,
                 indices_to_update.long().unsqueeze(1), # Ensure index is long
-                rewards_to_apply.unsqueeze(1)
             )
 
         # Incorporate KL penalty at each step
@@ -1001,6 +1002,11 @@ def train(cfg: DictConfig):
         OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
     except Exception as e:
         logging.info(f"Error saving final config: {e}")
+    wandb.init(
+        project=cfg.wandb.project,
+        config=OmegaConf.to_container(cfg, resolve=True), # Log resolved config
+        name=cfg.wandb.get("name", None) # Use configured name or default
+    )
 
     # --- 2. Load Models and Tokenizer ---
     try:
@@ -1082,22 +1088,16 @@ def train(cfg: DictConfig):
 
         # --- Phase 2: Update ---
         logging.info("Phase 2: Performing PPO Updates...")
-        try:
-            metrics = perform_ppo_updates(actor_model, optimizer,
+        metrics = perform_ppo_updates(actor_model, optimizer,
                                           rollout_buffer, cfg, device)
-        except Exception as e:
-            logging.info(f"Error during update phase: {e}")
-            import traceback
-            traceback.print_exc()
-            metrics = {}  # Ensure metrics exists
-
+        log_data = {}
+        log_data.update(metrics)
         # Log metrics
-        if metrics:
-            log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-            logging.info(f"Update Metrics (Avg over Epoch): {log_str}")
-            logging.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
-        else:
-            logging.info("PPO update skipped or failed.")
+        log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+        logging.info(f"Update Metrics (Avg over Epoch): {log_str}")
+        logging.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
+        log_data_this_step["rollout/reward_mean"] = avg_reward # Add rollout reward
+        wandb.log(log_data_this_step, step=ppo_step)
 
         # --- Phase 3: Save Checkpoint ---
         if (ppo_step + 1) % cfg.training.save_interval == 0:

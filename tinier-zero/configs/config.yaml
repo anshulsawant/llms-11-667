@@ -54,5 +54,4 @@ generation:
 wandb:
   report_to_wandb: true
   project: "tinier-zero"
-  name: "tinier-zero-ppo-training"
-  
+  name: null 
