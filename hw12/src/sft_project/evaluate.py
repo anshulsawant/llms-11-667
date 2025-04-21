@@ -110,6 +110,7 @@ def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dat
         original_columns = selected_eval_dataset.column_names
         formatted_eval_dataset = selected_eval_dataset.map(
             lambda x: format_prompt(x, cfg),
+            # Keep original columns temporarily if needed by format_prompt, will remove later
         )
         if "prompt" not in formatted_eval_dataset.column_names or \
            "ground_truth_answer" not in formatted_eval_dataset.column_names:
@@ -128,7 +129,7 @@ def load_and_prepare_eval_data(cfg: DictConfig, tokenizer: AutoTokenizer) -> Dat
 def run_evaluation(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
-    eval_dataset: Dataset, # Dataset now has 'prompt' and 'ground_truth_answer'
+    eval_dataset: Dataset, # Dataset now has 'prompt' and 'ground_truth_answer' + maybe originals
     cfg: DictConfig,
     accelerator: Accelerator,
     is_base_model_eval: bool = False
@@ -160,16 +161,12 @@ def run_evaluation(
         final_prompts = []
         for prompt in examples['prompt']:
             prompt_str = str(prompt if prompt is not None else "")
-            # Prepend base model instructions if applicable
             final_prompt = (instruction_text + few_shot_text + prompt_str) if is_base_model_eval else prompt_str
             final_prompts.append(final_prompt)
 
-        # Tokenize the final prompts
-        # Padding=False here, collator will handle batch padding
-        # Calculate max_input_length based on max_new_tokens for generation
         gen_cfg = cfg.get("evaluation", cfg.get("inference", {}))
         max_new_tokens = gen_cfg.get("max_new_tokens", 256)
-        buffer = 10 # Safety buffer
+        buffer = 10
         max_input_length = max_seq_length - max_new_tokens - buffer
         if max_input_length <= 0:
              logger.warning(f"Max sequence length ({max_seq_length}) too small for max_new_tokens ({max_new_tokens}). Setting max_input_length to {max_seq_length // 2}.")
@@ -177,42 +174,46 @@ def run_evaluation(
 
         model_inputs = tokenizer(
             final_prompts,
-            max_length=max_input_length, # Truncate input to leave space for generation
-            padding=False,
+            max_length=max_input_length,
+            padding=False, # Collator handles padding
             truncation=True
         )
-        # We only need input_ids and attention_mask for generation inputs
+        # --- FIX: Explicitly include ground_truth_answer in the output ---
+        # This ensures it's available after the map removes other columns.
+        model_inputs["ground_truth_answer"] = examples["ground_truth_answer"]
+        # --- End FIX ---
         return model_inputs
 
     logger.info("Preprocessing and tokenizing evaluation dataset...")
-    # Apply preprocessing and tokenization
-    # Keep 'ground_truth_answer' for later comparison, remove 'prompt'
+    # --- FIX: Remove all columns that existed *before* this map step ---
+    columns_to_remove = eval_dataset.column_names
     tokenized_eval_dataset = eval_dataset.map(
         preprocess_function,
         batched=True,
-        remove_columns=["prompt"] # Remove original prompt, keep ground_truth_answer and new tokenized cols
+        remove_columns=columns_to_remove # Remove all prior columns
     )
+    # --- End FIX ---
     logger.info(f"Tokenization complete. Final columns: {tokenized_eval_dataset.column_names}")
+    # Check if expected columns are present
     if not all(col in tokenized_eval_dataset.column_names for col in ['input_ids', 'attention_mask', 'ground_truth_answer']):
          logger.error(f"Tokenized dataset missing required columns for eval. Found: {tokenized_eval_dataset.column_names}")
          raise ValueError("Tokenized dataset missing required columns.")
 
     # --- Define Data Collator ---
-    # Use DataCollatorWithPadding for generation inputs (pads input_ids and attention_mask)
     data_collator = DataCollatorWithPadding(
         tokenizer=tokenizer,
-        padding='longest', # Pad to longest sequence in batch
-        pad_to_multiple_of=8 # Optional efficiency improvement
+        padding='longest',
+        pad_to_multiple_of=8
     )
     logger.info("Data collator defined.")
 
     # --- Create DataLoader ---
-    eval_batch_size = cfg.evaluation.get("batch_size", cfg.training.get("per_device_eval_batch_size", 4)) # Get batch size from config
+    eval_batch_size = cfg.evaluation.get("batch_size", cfg.training.get("per_device_eval_batch_size", 4))
     eval_dataloader = DataLoader(
         tokenized_eval_dataset,
         batch_size=eval_batch_size,
         collate_fn=data_collator,
-        shuffle=False # No need to shuffle for evaluation
+        shuffle=False
     )
     logger.info(f"DataLoader created with batch size {eval_batch_size}.")
 
@@ -231,57 +232,35 @@ def run_evaluation(
     }
     logger.info(f"Using evaluation generation parameters: {generation_kwargs}")
 
-
     # --- Evaluation Loop (Batched) ---
-    local_results = [] # Store dicts: {'prediction': str, 'ground_truth': str, 'is_correct': bool}
+    local_results = []
     progress_bar = tqdm(total=len(eval_dataloader), desc="Running Batched Evaluation", disable=not accelerator.is_local_main_process)
 
     for batch in eval_dataloader:
         input_ids = batch['input_ids']
         attention_mask = batch['attention_mask']
-        # Retrieve ground truths using the indices provided by the dataloader if it keeps track,
-        # otherwise, we need to fetch them based on the batch content.
-        # Since DataLoader doesn't shuffle and we kept 'ground_truth_answer', we can retrieve it.
-        # However, DataCollatorWithPadding might remove non-standard columns.
-        # Let's assume 'ground_truth_answer' is passed through or handle potential KeyError.
-        # A safer way is to iterate through the original dataset alongside the dataloader,
-        # but that complicates distributed evaluation. Let's try accessing it first.
+        # Ground truth should now be correctly passed if it was returned by preprocess_function
+        # DataCollatorWithPadding typically passes through columns it doesn't process
         try:
             ground_truths_batch = batch['ground_truth_answer']
         except KeyError:
-            # If collator removed it, we need another way to get ground truths aligned with the batch.
-            # This implementation assumes it's passed through. If not, this part needs redesign.
-            logger.error("Ground truth answers not found in DataLoader batch. DataCollator might be removing it.")
-            # Add error markers for this batch
+            logger.error("Ground truth answers ('ground_truth_answer') not found in DataLoader batch.")
             batch_size_fallback = input_ids.shape[0]
             for i in range(batch_size_fallback):
                  local_results.append({'prediction': '[ERROR: GT Missing]', 'ground_truth': 'N/A', 'is_correct': False})
             progress_bar.update(1)
             continue
 
-
         try:
-            # Generate predictions for the batch
             gen_kwargs_batch = generation_kwargs.copy()
-            outputs = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                **gen_kwargs_batch
-            )
-
-            # Decode generated sequences (excluding prompt)
+            outputs = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs_batch)
             input_lengths = torch.sum(attention_mask, dim=1)
-            generated_tokens = [
-                output_seq[input_len:] for output_seq, input_len in zip(outputs, input_lengths)
-            ]
+            generated_tokens = [output_seq[input_len:] for output_seq, input_len in zip(outputs, input_lengths)]
             predictions_batch = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
 
-            # --- Process Batch Results ---
             for i in range(len(predictions_batch)):
                 prediction = predictions_batch[i]
-                ground_truth = ground_truths_batch[i] # Assumes ground_truths_batch has same length
-
-                # Task-specific Post-processing and Comparison (GSM8K Example)
+                ground_truth = ground_truths_batch[i]
                 pred_answer = extract_gsm8k_answer(prediction)
                 true_answer = extract_gsm8k_answer(ground_truth)
                 is_correct = False
@@ -291,7 +270,6 @@ def run_evaluation(
                     except ValueError:
                         if pred_answer == true_answer: is_correct = True
                 elif pred_answer == true_answer: is_correct = True
-
                 local_results.append({'prediction': prediction, 'ground_truth': ground_truth, 'is_correct': is_correct})
 
         except Exception as e:
@@ -300,9 +278,7 @@ def run_evaluation(
             for i in range(batch_size):
                  gt = ground_truths_batch[i] if 'ground_truths_batch' in locals() else 'N/A'
                  local_results.append({'prediction': '[ERROR: Batch Failed]', 'ground_truth': gt, 'is_correct': False})
-
         progress_bar.update(1)
-
     progress_bar.close()
 
     # --- Aggregate Metrics ---
@@ -315,18 +291,11 @@ def run_evaluation(
         logger.info("Main process calculating final metrics...")
         correct_count = 0
         total_count = len(all_results_gathered)
-
         if total_count == 0: logger.warning("No results gathered."); return {"error": "No results gathered"}
-
         for result in all_results_gathered:
             if result.get('is_correct', False): correct_count += 1
-
         accuracy = (correct_count / total_count) * 100 if total_count > 0 else 0.0
-        final_metrics = {
-            "exact_match_accuracy": accuracy,
-            "correct_count": correct_count,
-            "total_samples_processed": total_count
-        }
+        final_metrics = {"exact_match_accuracy": accuracy, "correct_count": correct_count, "total_samples_processed": total_count}
         logger.info(f"Evaluation Metrics: {final_metrics}")
 
     accelerator.wait_for_everyone()
@@ -335,7 +304,7 @@ def run_evaluation(
 
 def main():
     """Main function for evaluation."""
-    args = parse_arguments() # Now only parses config paths and use_base_model
+    args = parse_arguments()
     logger.info("Starting evaluation script...")
     logger.info(f"CLI Arguments: {vars(args)}")
 
@@ -345,7 +314,7 @@ def main():
     except Exception as e: logger.error(f"Failed to load configuration: {e}", exc_info=True); sys.exit(1)
 
     accelerator = Accelerator()
-    set_seed(cfg.training.seed) # Use training seed for consistency
+    set_seed(cfg.training.seed)
 
     try:
         logger.info("Loading base model and tokenizer using config...")
@@ -384,12 +353,10 @@ def main():
     else: logger.info(f"Running evaluation with BASE model: '{cfg.model.name}'")
 
     try:
-        # Load data - results in dataset with 'prompt', 'ground_truth_answer', etc.
         eval_dataset_formatted = load_and_prepare_eval_data(cfg, tokenizer)
     except Exception as e: logger.error(f"Exiting due to eval data loading/prep failure: {e}", exc_info=True); sys.exit(1)
 
     logger.info("Starting evaluation process...")
-    # Pass the formatted dataset (before tokenization) to run_evaluation
     eval_metrics = run_evaluation(model, tokenizer, eval_dataset_formatted, cfg, accelerator, is_base_model_eval)
 
     # --- Construct Output File Path and Save Metrics ---
@@ -408,7 +375,7 @@ def main():
             output_file_path = output_dir / output_filename
             logger.info(f"Constructed evaluation metrics path: {output_file_path}")
         except Exception as e:
-            logger.error(f"Failed to construct output file path for evaluation metrics: {e}", exc_info=True)
+            logger.error(f"Failed to construct output file path: {e}", exc_info=True)
 
         if eval_metrics and "error" not in eval_metrics and output_file_path:
             logger.info(f"Saving evaluation metrics to: {output_file_path}")
