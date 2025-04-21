@@ -1,10 +1,10 @@
 # configs/config.yaml
 # Model & Tokenizer Configuration
 model:
-  name: "google/gemma-2b-it"
-  tokenizer_name: "google/gemma-2b-it"
+  name: "../hw12/sft_results_full_main/final_checkpoint" ## "google/gemma-2b-it"
+  tokenizer_name: "../hw12/sft_results_full_main/final_checkpoint" ## "google/gemma-2b-it"
   trust_remote_code: true # Needed for Qwen
-  torch_dtype: "bfloat32"
+  torch_dtype: "bfloat16"
 
 # Dataset & Task Configuration
 dataset:
@@ -31,6 +31,7 @@ ppo:
   lam: 0.95         # GAE lambda
   use_8bit_adam: true
   max_grad_norm: 1.0
+  rollout_samples: 96
 
 # Training Control
 training:
@@ -40,7 +41,6 @@ training:
   save_interval: 10 # Save model every N PPO steps
   output_dir: "outputs/ppo_gsm8k_${model.name}" # Sanitize model name, use model name in output
   device: "cuda"    # Set to "cpu" for CPU execution (use with debug config)
-  num_samples: 96
 
 # Generation settings for rollouts
 generation:

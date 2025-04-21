@@ -4,11 +4,10 @@
 Refactored PPO Trainer script for pedagogical purposes.
 Focuses on modularity and clarity over excessive defensive programming.
 """
-
 import logging
 logging.basicConfig(
-    level=logging.INFO, # <<< Make sure this is INFO or DEBUG
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', # Example format
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
