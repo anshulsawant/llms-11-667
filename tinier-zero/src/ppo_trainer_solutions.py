@@ -270,6 +270,7 @@ def compute_gae_advantages(
             token_level_rewards.scatter_(
                 1,
                 indices_to_update.long().unsqueeze(1), # Ensure index is long
+                rewards_to_apply,
             )
 
         # Incorporate KL penalty at each step
