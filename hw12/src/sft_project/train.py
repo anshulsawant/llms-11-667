@@ -55,7 +55,7 @@ def parse_arguments():
     """Parses command-line arguments for training."""
     parser = argparse.ArgumentParser(description="Run SFT training using configuration files.")
     parser.add_argument("--config_path", type=str, required=True, help="Path to the override configuration YAML file.")
-    parser.add_argument("--base_config_path", type=str, default="config.yaml", help="Path to the base configuration YAML file.")
+    parser.add_argument("--base_config_path", type=str, default="configs/config.yaml", help="Path to the base configuration YAML file.")
     # Add other potential CLI overrides if needed, but prefer config
     return parser.parse_args()
 
