@@ -5,6 +5,7 @@ Refactored PPO Trainer script for pedagogical purposes.
 Focuses on modularity and clarity over excessive defensive programming.
 """
 
+import logging
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -481,7 +482,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
     progress_bar = tqdm(prompt_dataloader, desc="Rollout", leave=False)
     for batch in progress_bar:
         if batch is None:  # Handle potential error from collate_fn
-            print("Warning: Skipping None batch from dataloader.")
+            logging.info("Warning: Skipping None batch from dataloader.")
             continue
         prompt_ids = batch["prompt_input_ids"].to(device)
         prompt_mask = batch["prompt_attention_mask"].to(device)
@@ -560,7 +561,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
             collated_buffer[key] = pad_and_collate_tensors(
                 data_list, padding_value=pad_val)
         else:
-            print(f"Warning: Unexpected key '{key}' in buffer collation.")
+            logging.info(f"Warning: Unexpected key '{key}' in buffer collation.")
             collated_buffer[key] = data_list  # Keep as is
 
     return collated_buffer
@@ -737,9 +738,9 @@ def perform_ppo_updates(
             f"Error moving buffer to device, likely due to non-tensor data: {e}"
         )
         # Print buffer keys and types for debugging
-        print("Rollout Buffer Contents (Keys and Types):")
+        logging.info("Rollout Buffer Contents (Keys and Types):")
         for k, v in rollout_buffer.items():
-            print(f"  {k}: {type(v)}")
+            logging.info(f"  {k}: {type(v)}")
         return {}  # Cannot proceed
 
     # Basic validation after moving to device
@@ -776,19 +777,19 @@ def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
     if cfg.training.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
         torch.cuda.manual_seed_all(cfg.training.seed)
-        print(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
+        logging.info(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
     else:
         if cfg.training.device == "cuda":
-            print("Warning: CUDA requested but unavailable, using CPU.")
+            logging.info("Warning: CUDA requested but unavailable, using CPU.")
         device = torch.device("cpu")
-    print(f"Using device: {device}")
+    logging.info(f"Using device: {device}")
 
     output_dir = cfg.training.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    print(f"Output directory: {output_dir}")
+    logging.info(f"Output directory: {output_dir}")
     # Save config (optional, can be done in main train loop)
     # try: OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
-    # except Exception as e: print(f"Error saving config: {e}")
+    # except Exception as e: logging.info(f"Error saving config: {e}")
 
     return device, output_dir
 
@@ -797,17 +798,17 @@ def load_models_and_tokenizer(
     cfg: DictConfig, device: torch.device
 ) -> Tuple[ActorModelWithValueHead, PreTrainedModel, PreTrainedTokenizerBase]:
     """Loads tokenizer, actor model (with value head), and reference model."""
-    print(f"Loading tokenizer: {cfg.model.tokenizer_name}")
+    logging.info(f"Loading tokenizer: {cfg.model.tokenizer_name}")
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.tokenizer_name)
     # --- Set Padding Token ---
     if tokenizer.pad_token is None or tokenizer.pad_token_id is None:
-        print("Setting pad_token to eos_token.")
+        logging.info("Setting pad_token to eos_token.")
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
     # Explicitly set padding side (optional, default is often right)
     # tokenizer.padding_side = 'left' # Uncomment to use left padding
 
-    print(f"Loading models: {cfg.model.name}")
+    logging.info(f"Loading models: {cfg.model.name}")
     # --- Model Kwargs (dtype, quantization, etc.) ---
     model_kwargs = {}
     model_dtype_str = cfg.model.get("torch_dtype", "auto")
@@ -822,7 +823,7 @@ def load_models_and_tokenizer(
         model_kwargs["trust_remote_code"] = True
     if cfg.model.get("quantization"):
         q_cfg = cfg.model.quantization
-        print(f"Applying quantization: {q_cfg}")
+        logging.info(f"Applying quantization: {q_cfg}")
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_8bit=q_cfg.get("load_in_8bit", False),
             load_in_4bit=q_cfg.get("load_in_4bit", False),
@@ -840,7 +841,7 @@ def load_models_and_tokenizer(
     # Ensure pad token ID is set in model config
     if actor_model.config.pad_token_id is None:
         actor_model.config.pad_token_id = tokenizer.pad_token_id
-    print("Actor model loaded.")
+    logging.info("Actor model loaded.")
 
     # --- Load Reference Model ---
     ref_model_kwargs = model_kwargs.copy()
@@ -855,7 +856,7 @@ def load_models_and_tokenizer(
     for param in ref_model.parameters():
         param.requires_grad = False
     ref_model.eval()
-    print("Reference model loaded and frozen.")
+    logging.info("Reference model loaded and frozen.")
 
     return actor_model, ref_model, tokenizer
 
@@ -863,20 +864,20 @@ def load_models_and_tokenizer(
 def load_and_preprocess_dataset(cfg: DictConfig,
                                 tokenizer: PreTrainedTokenizerBase) -> Dataset:
     """Loads the dataset and preprocesses it."""
-    print(f"Loading dataset: {cfg.dataset.name}")
+    logging.info(f"Loading dataset: {cfg.dataset.name}")
     try:
         dataset = load_dataset(cfg.dataset.name,
                                cfg.dataset.get("config"),
                                split=cfg.dataset.split)
     except Exception as e:
-        print(f"Error loading dataset '{cfg.dataset.name}': {e}")
+        logging.info(f"Error loading dataset '{cfg.dataset.name}': {e}")
         raise  # Re-raise critical error
 
     # --- Subsetting ---
     num_samples = cfg.training.get("num_samples")
     if num_samples is not None and num_samples > 0 and num_samples <= len(
             dataset):
-        print(f"Subsetting dataset to {num_samples} samples.")
+        logging.info(f"Subsetting dataset to {num_samples} samples.")
         dataset = dataset.select(range(num_samples))
 
     # --- Preprocessing Function ---
@@ -908,10 +909,10 @@ def load_and_preprocess_dataset(cfg: DictConfig,
             remove_columns=dataset.column_names  # Keep only processed columns
         )
         processed_dataset.set_format(type="torch")  # Set format for DataLoader
-        print(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
+        logging.info(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
         return processed_dataset
     except Exception as e:
-        print(f"Error during dataset mapping: {e}")
+        logging.info(f"Error during dataset mapping: {e}")
         raise  # Re-raise critical error
 
 
@@ -933,7 +934,7 @@ def setup_optimizer(cfg: DictConfig,
             )
             optimizer = AdamW(model.parameters(), lr=lr)
         else:
-            print("Using 8-bit AdamW Optimizer (bitsandbytes)")
+            logging.info("Using 8-bit AdamW Optimizer (bitsandbytes)")
             optimizer = bnb_optim.AdamW8bit(model.parameters(), lr=lr)
     else:
         if use_8bit:
@@ -941,7 +942,7 @@ def setup_optimizer(cfg: DictConfig,
                 "Info: 8-bit Adam not used (requirements not met). Using standard AdamW."
             )
         else:
-            print("Using standard AdamW Optimizer")
+            logging.info("Using standard AdamW Optimizer")
         optimizer = AdamW(model.parameters(), lr=lr)
     return optimizer
 
@@ -962,7 +963,7 @@ def create_generation_config(
 def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase,
                save_path: str):
     """Saves the model and tokenizer."""
-    print(f"Saving model checkpoint to {save_path}...")
+    logging.info(f"Saving model checkpoint to {save_path}...")
     os.makedirs(save_path, exist_ok=True)
     try:
         # Handle potential model wrappers (like ActorModelWithValueHead)
@@ -971,9 +972,9 @@ def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase,
         # if hasattr(unwrapped_model, 'save_pretrained'):
         unwrapped_model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
-        print(f"Model and tokenizer saved.")
+        logging.info(f"Model and tokenizer saved.")
     except Exception as e:
-        print(f"Error saving model: {e}")
+        logging.info(f"Error saving model: {e}")
 
 
 # ==============================================================================
@@ -989,21 +990,21 @@ def train(cfg: DictConfig):
     try:
         OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
     except Exception as e:
-        print(f"Error saving final config: {e}")
+        logging.info(f"Error saving final config: {e}")
 
     # --- 2. Load Models and Tokenizer ---
     try:
         actor_model, ref_model, tokenizer = load_models_and_tokenizer(
             cfg, device)
     except Exception as e:
-        print(f"Failed to load models/tokenizer: {e}")
+        logging.info(f"Failed to load models/tokenizer: {e}")
         return  # Cannot proceed
 
     # --- 3. Load and Preprocess Dataset ---
     try:
         processed_dataset = load_and_preprocess_dataset(cfg, tokenizer)
     except Exception as e:
-        print(f"Failed to load/preprocess dataset: {e}")
+        logging.info(f"Failed to load/preprocess dataset: {e}")
         return  # Cannot proceed
 
     # --- 4. Setup Optimizer ---
@@ -1022,7 +1023,7 @@ def train(cfg: DictConfig):
                                           return_tensors="pt",
                                           return_attention_mask=True)
         except Exception as e:
-            print(f"Error during tokenizer.pad in collate_fn: {e}")
+            logging.info(f"Error during tokenizer.pad in collate_fn: {e}")
             return None  # Signal error to dataloader loop
         ground_truths = [item['ground_truth_answer'] for item in batch]
         return {
@@ -1032,14 +1033,14 @@ def train(cfg: DictConfig):
         }
 
     # --- 7. Main PPO Loop ---
-    print("\n--- Starting PPO Training ---")
+    logging.info("\n--- Starting PPO Training ---")
     for ppo_step in range(cfg.training.total_ppo_steps):
         print(
             f"\n===== PPO Step {ppo_step + 1}/{cfg.training.total_ppo_steps} ====="
         )
 
         # --- Phase 1: Rollout ---
-        print("Phase 1: Generating Rollouts...")
+        logging.info("Phase 1: Generating Rollouts...")
         prompt_dataloader = DataLoader(processed_dataset.shuffle(
             seed=cfg.training.seed).select(range(cfg.ppo.rollout_samples)),
                                        batch_size=cfg.ppo.batch_size,
@@ -1050,7 +1051,7 @@ def train(cfg: DictConfig):
                                               tokenizer, prompt_dataloader,
                                               gen_config, device)
         except Exception as e:
-            print(f"Error during rollout phase: {e}")
+            logging.info(f"Error during rollout phase: {e}")
             import traceback
             traceback.print_exc()
             continue  # Skip to next PPO step
@@ -1070,12 +1071,12 @@ def train(cfg: DictConfig):
         )
 
         # --- Phase 2: Update ---
-        print("Phase 2: Performing PPO Updates...")
+        logging.info("Phase 2: Performing PPO Updates...")
         try:
             metrics = perform_ppo_updates(actor_model, optimizer,
                                           rollout_buffer, cfg, device)
         except Exception as e:
-            print(f"Error during update phase: {e}")
+            logging.info(f"Error during update phase: {e}")
             import traceback
             traceback.print_exc()
             metrics = {}  # Ensure metrics exists
@@ -1083,10 +1084,10 @@ def train(cfg: DictConfig):
         # Log metrics
         if metrics:
             log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-            print(f"Update Metrics (Avg over Epoch): {log_str}")
-            print(f"  Rollout Reward (for this step): {avg_reward:.4f}")
+            logging.info(f"Update Metrics (Avg over Epoch): {log_str}")
+            logging.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
         else:
-            print("PPO update skipped or failed.")
+            logging.info("PPO update skipped or failed.")
 
         # --- Phase 3: Save Checkpoint ---
         if (ppo_step + 1) % cfg.training.save_interval == 0:
@@ -1094,7 +1095,7 @@ def train(cfg: DictConfig):
                        os.path.join(output_dir, f"step_{ppo_step + 1}"))
 
     # --- 8. Final Save ---
-    print("\n--- PPO Training Finished ---")
+    logging.info("\n--- PPO Training Finished ---")
     save_model(actor_model, tokenizer, os.path.join(output_dir, "final"))
 
 
@@ -1129,7 +1130,7 @@ def load_config_with_cli_overrides(
         )
         sys.exit(1)
 
-    print(f"Loading config from: {conf_path}")
+    logging.info(f"Loading config from: {conf_path}")
     cfg = OmegaConf.load(conf_path)
 
     # Handle 'defaults' for base config merging (simplified)
@@ -1142,11 +1143,11 @@ def load_config_with_cli_overrides(
                                           base_conf_name)  # Fallback
 
         if os.path.exists(base_conf_path):
-            print(f"Loading base config from: {base_conf_path}")
+            logging.info(f"Loading base config from: {base_conf_path}")
             base_cfg = OmegaConf.load(base_conf_path)
             cfg = OmegaConf.merge(base_cfg, cfg)  # Merge base first
         else:
-            print(f"Warning: Base config '{base_conf_name}' not found.")
+            logging.info(f"Warning: Base config '{base_conf_name}' not found.")
         # Clean up defaults key if desired
         OmegaConf.set_struct(cfg, False)
         cfg.pop('defaults', None)
@@ -1154,7 +1155,7 @@ def load_config_with_cli_overrides(
 
     # Apply CLI overrides
     if args.overrides:
-        print(f"Applying overrides: {args.overrides}")
+        logging.info(f"Applying overrides: {args.overrides}")
         cli_conf = OmegaConf.from_cli(args.overrides)
         cfg = OmegaConf.merge(cfg, cli_conf)
 
@@ -1162,11 +1163,11 @@ def load_config_with_cli_overrides(
     try:
         OmegaConf.resolve(cfg)
     except Exception as e:
-        print(f"Warning: Config resolution error: {e}")
+        logging.info(f"Warning: Config resolution error: {e}")
 
-    print("--------- Final Configuration ---------")
-    print(OmegaConf.to_yaml(cfg, resolve=True))  # Print resolved config
-    print("---------------------------------------")
+    logging.info("--------- Final Configuration ---------")
+    logging.info(OmegaConf.to_yaml(cfg, resolve=True))  # Print resolved config
+    logging.info("---------------------------------------")
     return cfg
 
 
