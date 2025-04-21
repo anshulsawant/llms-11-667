@@ -265,7 +265,7 @@ def compute_gae_advantages(
             # Ensure indices used for indexing final_rewards are valid
             rewards_to_apply = final_rewards[valid_indices]
             indices_to_update = last_token_indices[valid_indices]
-            rewards_to_apply.to(token_level_rewards.dtype)
+            rewards_to_apply = rewards_to_apply.to(token_level_rewards.dtype)
             # Scatter reward to the step *before* the terminal state
             token_level_rewards.scatter_(
                 1,
