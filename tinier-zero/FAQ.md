@@ -158,6 +158,9 @@ Training two interdependent components like the policy (Actor) and the value fun
 	If lambda = 1, A_t^{GAE} approximates the Monte Carlo advantage G_t - V(s_t).
 
 	Values between 0 and 1 interpolate, often providing a good balance (lambda=0.95 is common).
+	
+	The "peculiar" GAE formula A_t^{GAE} = sum_{l=0}^{inf} (gamma*lambda)^l * delta_{t+l} arises naturally as an exponentially weighted average of TD errors, providing a mechanism (controlled by lambda) to smoothly interpolate between the low-variance, high-bias TD advantage (lambda=0) and the high-variance, low-bias Monte Carlo advantage (lambda=1).
+
 
 	Why Compute in Reverse?
 	Calculating the GAE sum directly using the formula above involves looking ahead at all future TD errors for each time step t. This would be inefficient.
@@ -196,3 +199,27 @@ Training two interdependent components like the policy (Actor) and the value fun
 	Summation Accumulates Variance: Since G_t is a sum of all these potentially random future rewards, the variance from each step accumulates. The longer the trajectory from step t to the end, the more random events can influence the outcome, and the higher the variance of the sum G_t will be. Imagine trying to predict the exact score of a basketball game after the first minute – many random events (shots made/missed, fouls, turnovers) will happen, making the final score highly variable.
 	Contrast with TD Error: The TD error (delta_t = r_t + gamma * V(s_{t+1}) - V(s_t)) only depends on the immediate reward r_t and the estimated value V(s_{t+1}). It doesn't rely on the actual outcomes of all future steps. While V(s_{t+1}) might be biased, it's usually much less variable than the actual sum of all future rewards (G_{t+1}). This makes delta_t (and GAE with low lambda) have lower variance.
 	In essence, the Monte Carlo return G_t captures the full, unbiased outcome of a specific trajectory, but because that trajectory is subject to the accumulated randomness of potentially many future steps, the value of G_t can vary wildly between different rollouts starting from the same state s_t. This high variance makes the learning signal noisy and potentially unstable.
+
+9. What is the `returns` calculated in GAE implementation?
+
+	In reinforcement learning terms:
+
+	Return(s_t) = Advantage(s_t) + Value(s_t)
+
+	What do they represent?
+
+	These returns serve as the target values for training the value function (the critic). The goal of the value function V(s_t) is to predict the expected total discounted future reward from state s_t.
+
+	The GAE advantages (A_t) estimate how much better or worse the actual outcome (incorporating rewards and future value estimates, balanced by lambda) was compared to the initial value estimate V(s_t).
+	By adding the original value estimate V(s_t) back to the calculated advantage A_t, we get returns_t = A_t + V(s_t). This returns_t represents an improved estimate of the actual discounted reward-to-go from state s_t, incorporating information from the rollout trajectory via the GAE calculation.
+
+10. Why are `advantages` whitened at the end?
+
+	That's a standard and important step in many PPO implementations. "Whitening" the advantages means normalizing them across the batch so they have approximately zero mean and unit standard deviation.
+
+	Here's why it's done at the end of compute_gae_advantages (using the masked_whiten helper function):
+
+	Stabilizing Policy Updates: The raw advantage values (A_t) can have arbitrary scales depending on the rewards, the value function's accuracy, and the discount factor. If some advantages are very large (either positive or negative), they can dominate the policy gradient calculation (log_prob * advantage), leading to excessively large or unstable updates to the policy network. Normalizing the advantages brings them to a consistent scale (mean ~0, std ~1), preventing these outlier values from destabilizing the learning process.
+	Consistent Gradient Scale: By ensuring advantages have a similar scale across different batches and throughout training, whitening helps maintain a more consistent scale for the policy gradients. This makes the learning process less sensitive to the absolute magnitude of rewards or value function errors, potentially making hyperparameters like the learning rate and clipping ratio easier to tune and more robust.
+	Improving Learning Dynamics: Empirically, normalizing advantages has often been found to improve the stability and sample efficiency of policy gradient algorithms like PPO. It ensures that the direction of the update is prioritized over the potentially noisy magnitude of the raw advantage estimates.
+	Essentially, whitening advantages is a normalization technique that helps keep the policy updates well-behaved and stable, contributing to more reliable learning. The masked_whiten function ensures this normalization is done correctly, considering only the valid (non-padded) time steps specified by the response_mask.

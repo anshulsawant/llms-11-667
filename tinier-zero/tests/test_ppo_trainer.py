@@ -372,52 +372,44 @@ class TestPPOAlgos:
         torch.testing.assert_close(advantages_calc, advantages_whitened_expected, rtol=1e-3, atol=1e-3)
         torch.testing.assert_close(returns_calc, returns_expected, rtol=1e-3, atol=1e-3)
 
-    def test_compute_gae_advantages_masking(self):
-         # Case where sequence ends early
-        response_mask_s_padded = torch.tensor([[1, 0]], dtype=torch.long) # Only step 0 is valid
-        final_rewards_s = torch.tensor([10.0]) # Reward applies after step 0
-        kl_penalties_s = torch.tensor([[0.1, 0.2]])
-        values_s = torch.tensor([[1.0, 2.0]]) # V(s_0), V(s_1) (V(s_1) is unused)
-        gamma = 0.9
-        lam = 0.9
+def test_compute_gae_advantages_masking():
+    """
+    Tests GAE calculation when the response mask indicates the sequence
+    ended early (e.g., only the first step is valid).
+    """
+    # --- Test Setup ---
+    # Mask indicates only step t=0 is valid in a sequence of length 2
+    response_mask_s_padded = torch.tensor([[1, 0]], dtype=torch.long)
+    # Final reward received after the valid sequence (after step t=0)
+    final_rewards_s = torch.tensor([10.0])
+    # Example KL penalties for t=0 and t=1
+    kl_penalties_s = torch.tensor([[0.1, 0.2]])
+    # Value estimates V(s0)=1.0, V(s1)=2.0 (V(s1) should be ignored in propagation)
+    values_s = torch.tensor([[1.0, 2.0]])
+    gamma = 0.9
+    lam = 0.9
 
-        # r_0 = 10.0 - 0.1 = 9.9
-        # r_1 = 0 - 0.2 = -0.2 (but masked)
+    # --- Expected Calculation (Manual Trace) ---
+    # Token Rewards: r0 = (10.0 - 0.1) = 9.9; r1 = (0.0 - 0.2) = -0.2
+    # GAE Loop (t=1): delta1 = r1 + g*V(s2)*m2 - V(s1) = -0.2 + g*0*0 - 2.0 = -2.2
+    #                 A1 = delta1 + g*l*A2*m2 = -2.2 + 0 = -2.2
+    # GAE Loop (t=0): delta0 = r0 + g*V(s1)*m1 - V(s0) = 9.9 + 0.9*2.0*0 - 1.0 = 8.9
+    # A0 = delta0 + g*l*A1*mask_1 = 8.9 + g*l*(-2.2)*0 = 8.9
+    # Advantages (unwhitened): [[8.9, -2.2]]
+    # Returns = Advantages + Values: [[8.9+1.0, -2.2+2.0]] = [[9.9, -0.2]]
+    # Whiten Advantages: Mean(masked=8.9)=8.9. Var=0. Std=eps. Whitened=[[(8.9-8.9)/eps, (-2.2-8.9)/eps]] -> [[0.0, large_neg]]. Masked=[[0.0, 0.0]]
 
-        # t = 1 (masked):
-        # delta_1 = r_1 + gamma*V(s2) - V(s1) = -0.2 + 0 - 2.0 = -2.2
-        # A_1 = delta_1 + gamma*lam*A_2*mask_2 = -2.2 + 0 = -2.2
-        # But this step is masked out by current_mask in GAE loop for A_0 calculation
-        # Let's trace GAE loop:
-        # t=1: next_values=0, current_mask=0. delta = -0.2 + 0.9*0*0 - 2.0 = -2.2.
-        #   last_gae = -2.2 + 0.9*0.9*0*0 = -2.2. adv_rev = [-2.2]
-        # t=0: next_values=V(s1)=2.0, current_mask=1.
-        #   delta = r_0 + gamma*V(s1)*mask_1 - V(s0) = 9.9 + 0.9*2.0*1 - 1.0 = 9.9 + 1.8 - 1.0 = 10.7.
-        #   last_gae = delta_0 + gamma*lam*last_gae(A_1)*mask_1 = 10.7 + 0.9*0.9*(-2.2)*0 = 10.7. adv_rev = [-2.2, 10.7]
-        advantages_manual = torch.tensor([[10.7, -2.2]]) # Before masking in whiten/return
-        returns_manual = advantages_manual + values_s # Shape (1, 2)
+    advantages_whitened_expected = torch.tensor([[0.0, 0.0]])
+    ## r_1 will never actually be used and can be ignored
+    returns_expected = torch.tensor([[9.9, -0.2]]) # Unmasked returns are the target
 
-        # Apply mask to expected results before whitening/comparison
-        advantages_expected = advantages_manual * response_mask_s_padded.float() # [[10.7, 0.0]]
-        returns_expected = returns_manual
+    # --- Run Function ---
+    advantages_calc, returns_calc = compute_gae_advantages(
+        final_rewards_s, kl_penalties_s, values_s, response_mask_s_padded, gamma, lam
+    )
 
-        # Whiten the masked advantage
-        # Mean = 10.7 / 1 = 10.7. Var = ((10.7-10.7)^2)/1 = 0. Std = 1e-4 (epsilon)
-        # Whitened = (10.7 - 10.7) / std -> approx 0. Masked -> [[0.0, 0.0]]
-        advantages_whitened_expected = torch.tensor([[0.0, 0.0]])
-
-        advantages_calc, returns_calc = compute_gae_advantages(
-            final_rewards_s, kl_penalties_s, values_s, response_mask_s_padded, gamma, lam
-        )
-
-        print(f'advantages_calc: {advantages_calc}')
-        print(f'returns_calc: {returns_calc}')
-
-        # Check shapes
-        assert advantages_calc.shape == (1, 2)
-        assert returns_calc.shape == (1, 2)
-
-        # Compare results (whitened adv will be ~0 due to single element)
-        torch.testing.assert_close(advantages_calc, advantages_whitened_expected, rtol=1e-3, atol=1e-3)
-        # Compare returns (should match expected masked returns)
-        torch.testing.assert_close(returns_calc, returns_expected, rtol=1e-3, atol=1e-3)
+    # --- Assertions ---
+    assert advantages_calc.shape == (1, 2), "Advantage shape mismatch"
+    assert returns_calc.shape == (1, 2), "Return shape mismatch"
+    torch.testing.assert_close(advantages_calc, advantages_whitened_expected, rtol=1e-3, atol=1e-3, msg="Whitened Advantages mismatch")
+    torch.testing.assert_close(returns_calc, returns_expected, rtol=1e-3, atol=1e-3, msg="Returns mismatch")

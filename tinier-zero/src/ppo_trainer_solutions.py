@@ -279,16 +279,19 @@ def compute_gae_advantages(
             # Note: We use next_mask for V(s_{t+1}) term. V(s_t) term (values[:, t]) is used regardless of mask_t
             # because delta is non-zero even if s_t is terminal (used for A_t calc).
             delta = token_level_rewards[:, t] + gamma * next_values * next_mask - values[:, t]
-
             # GAE: A_t = delta_t + gamma * lambda * A_{t+1} * mask_{t+1}
             # last_gae_lam holds A_{t+1} from previous iteration
             # --- MODIFIED LINE ---
             last_gae_lam = delta + gamma * lam * last_gae_lam * next_mask # Use next_mask here
+            print(t, delta, last_gae_lam)
             # --- END MODIFIED LINE ---
             advantages_reversed.append(last_gae_lam)
 
+        
+
         # Reverse the list and stack into a tensor
         advantages = torch.stack(advantages_reversed[::-1], dim=1)
+        print(advantages)
         # Returns = Advantages + Values (Return G_t = A_t + V(s_t))
         returns = advantages + values
 
