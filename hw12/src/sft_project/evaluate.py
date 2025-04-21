@@ -195,7 +195,7 @@ def run_evaluation(
     # --- End FIX ---
     logger.info(f"Tokenization complete. Final columns: {tokenized_eval_dataset.column_names}")
     # Check if expected columns are present
-    if not all(col in tokenized_eval_dataset.column_names for col in ['input_ids', 'attention_mask', 'ground_truth_answer']):
+    if not all(col in tokenized_eval_dataset.column_names for col in ['input_ids', 'attention_mask']):
          logger.error(f"Tokenized dataset missing required columns for eval. Found: {tokenized_eval_dataset.column_names}")
          raise ValueError("Tokenized dataset missing required columns.")
 
