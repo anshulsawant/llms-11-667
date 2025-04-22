@@ -19,7 +19,7 @@ dataset:
 ppo:
   learning_rate: 5.0e-7
   epochs: 2        # Optimization epochs per rollout phase
-  batch_size: 24     # Rollout batch size (adjust based on VRAM)
+  batch_size: 16     # Rollout batch size (adjust based on VRAM)
   mini_batch_size: 2 # Update mini-batch size (adjust based on VRAM)
   gradient_accumulation_steps: 8 # Effective update batch size = mini_batch_size * grad_acc_steps
   kl_coeff: 0.05     # KL penalty coefficient (beta)
