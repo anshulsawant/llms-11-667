@@ -1,5 +1,5 @@
 {
-    "exact_match_accuracy": 31.0,
-    "correct_count": 31,
-    "total_samples": 100
+    "exact_match_accuracy": 25.0,
+    "correct_count": 128,
+    "total_samples_processed": 512
 }
