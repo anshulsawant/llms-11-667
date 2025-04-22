@@ -102,9 +102,14 @@ def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
     # Use strict method first: Search for #### followed by a potential number
     # The regex captures digits, optional sign, dots, and commas.
     solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
+    solution = solution_match.group(0)
+
     try:
-        float(solution_match)
-        return solution_match
+        if solution is not None:
+            float(solution) 
+            return solution
+        else:
+            return None
     except ValueError:
             return None # Not a valid number, return None
 
