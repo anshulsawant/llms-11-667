@@ -51,7 +51,7 @@ pip install -e .
 
 **f. Weights & Biases Authentication** (`wandb login`)
 
-**g. Hardware Requirements** (Full SFT needs high VRAM, LoRA is more efficient)
+  * [ ] **g. Hardware Requirements** (Full SFT needs high VRAM, LoRA is more efficient)
 
 ## 2. Configuration
 

@@ -89,7 +89,7 @@ tinier-zero/
 2.  **Clone the Repository (If Applicable):**
     ```bash
     git clone https://github.com/anshulsawant/llms-11-667.git
-    cd tinier-zero
+    cd llms-11-667/tinier-zero
     ```
 
 3.  **Create Virtual Environment (Recommended):**
@@ -112,6 +112,10 @@ tinier-zero/
         pip install -e .[dev]
         ```
         *(Note: If you don't need `bitsandbytes` for 8-bit Adam, you can remove it from `requirements.txt` before installing).*
+6. Hugging Face Authentication 
+```bash
+huggingface-cli login`
+```
 5. Login to wandb
    ```bash
    wandb login
