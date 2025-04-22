@@ -140,7 +140,7 @@ def compute_gsm8k_reward(generated_text: str, ground_truth_str: str) -> float:
     try:
         extracted_answer = float(extracted_answer_str)
         ground_truth = float(ground_truth_str)
-        return 1.0 if math.isclose(extracted_answer, ground_truth) else 0.0
+        return 1.0 if math.isclose(extracted_answer, ground_truth) else 0.1
     except ValueError:
         return 0.0  # Handle non-numeric cases
 
@@ -551,8 +551,6 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
             individual_lengths.extend(lengths_in_batch.cpu().numpy()) # Use .numpy() or .tolist()
 
     avg_resp_len = np.mean(individual_lengths) if individual_lengths else 0.0
-    # Log the correctly calculated average length
-    logging.info(f"Average response length per sequence for this rollout: {avg_resp_len:.2f}")
 
     all_resp_lengths = [mask.sum().item() for mask in buffer_lists["response_attention_mask"]]
     avg_resp_len = np.mean(all_resp_lengths) if all_resp_lengths else 0.0
