@@ -696,6 +696,44 @@ def run_ppo_update_epoch(
         scaled_loss = loss / cfg.ppo.gradient_accumulation_steps
         scaled_loss.backward()
 
+        logging.info("--- Checking Parameter Gradients ---")
+        found_none_grad = False
+        found_zero_grad = False
+        found_non_zero_grad = False
+
+        # Iterate through all named parameters in your model
+        # Ensure 'model' is your actual model variable
+        for name, param in actor_model.named_parameters():
+            if not param.requires_grad:
+                # logger.debug(f"Skipping frozen param: {name}") # Use DEBUG for very verbose info
+                continue
+            
+            if param.grad is None:
+                logging.warning(f"Gradient is None for trainable parameter: {name}")
+                found_none_grad = True
+            elif torch.all(param.grad == 0):
+                # Check if the entire gradient tensor is zero
+                # logger.debug(f"Gradient is all zeros for parameter: {name}") # DEBUG level is appropriate
+                found_zero_grad = True
+            else:
+                # Gradient exists and is non-zero
+                found_non_zero_grad = True
+                # Optional NaN/Inf check:
+                # if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                #     logger.error(f"NaN/Inf gradient found for parameter: {name}")
+                
+                # --- Summary ---
+                if not found_non_zero_grad:
+                    logging.critical("No non-zero gradients found for any trainable parameter!")
+                elif found_none_grad:
+                    logging.warning("Some trainable parameters have None gradients (check graph connection).")
+                    # Optional: Log if only zero grads were found (might indicate issues)
+                elif found_zero_grad and not found_none_grad:
+                    logging.info("All found gradients are zero (check loss function / saturation).")
+                else:
+                    logging.info("Gradients seem to be computed for trainable parameters.")
+                    logging.info("------------------------------------")
+
         # 6. Store Metrics
         current_metrics = {
             'loss/policy': policy_loss.item(),
