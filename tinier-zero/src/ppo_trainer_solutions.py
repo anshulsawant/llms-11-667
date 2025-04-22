@@ -25,6 +25,7 @@ except ImportError:
     bnb_available = False
 
 from transformers import (
+    get_scheduler,
     AutoTokenizer,
     AutoModelForCausalLM,
     GenerationConfig,
@@ -587,6 +588,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
 def run_ppo_update_epoch(
         actor_model: ActorModelWithValueHead,
         optimizer: torch.optim.Optimizer,
+        lr_scheduler,
         collated_buffer: Dict[
             str, torch.Tensor],  # Assumes tensors are on correct device
         cfg: DictConfig,
@@ -719,6 +721,7 @@ def run_ppo_update_epoch(
                 aggregate_metrics.setdefault('params/grad_norm',
                                              []).append(grad_norm.item())
                 optimizer.step()
+                lr_scheduler.step()
             # Zero grad AFTER potential step
             optimizer.zero_grad(set_to_none=True)
 
@@ -734,6 +737,7 @@ def run_ppo_update_epoch(
 def perform_ppo_updates(
         actor_model: ActorModelWithValueHead,
         optimizer: torch.optim.Optimizer,
+        lr_scheduler,
         rollout_buffer: Dict[str, Any],  # Can contain lists or tensors
         cfg: DictConfig,
         device: torch.device) -> Dict[str, float]:
@@ -766,7 +770,7 @@ def perform_ppo_updates(
 
     all_epoch_metrics = {}
     for ppo_epoch in range(cfg.ppo.epochs):
-        epoch_metrics = run_ppo_update_epoch(actor_model, optimizer,
+        epoch_metrics = run_ppo_update_epoch(actor_model, optimizer, lr_scheduler,
                                              buffer_on_device, cfg, device)
         # Aggregate metrics across epochs (e.g., average or store last)
         # Here, we just store the metrics from the last epoch for simplicity
@@ -963,7 +967,14 @@ def setup_optimizer(cfg: DictConfig,
         else:
             logging.info("Using standard AdamW Optimizer")
         optimizer = AdamW(model.parameters(), lr=lr)
-    return optimizer
+    lr_scheduler = get_scheduler(
+        cfg.ppo.scheduler, optimizer, cfg.warmup_steps,
+        num_training_steps=(
+            cfg.training.total_ppo_steps *
+            ((cfg.ppo.rollout_samples // cfg.ppo.mini_batch_size) //
+             cfg.ppo.gradient_accumulation_steps) * cfg.ppo.epochs),
+        scheduler_specific_kwargs={'min_lr' : cfg.ppo.min_lr})
+    return optimizer, lr_scheduler
 
 
 def create_generation_config(
@@ -1032,7 +1043,7 @@ def train(cfg: DictConfig):
         return  # Cannot proceed
 
     # --- 4. Setup Optimizer ---
-    optimizer = setup_optimizer(cfg, actor_model)
+    optimizer, lr_scheduler = setup_optimizer(cfg, actor_model)
 
     # --- 5. Generation Config ---
     gen_config = create_generation_config(cfg, tokenizer)
@@ -1096,7 +1107,7 @@ def train(cfg: DictConfig):
 
         # --- Phase 2: Update ---
         logging.info("Phase 2: Performing PPO Updates...")
-        metrics = perform_ppo_updates(actor_model, optimizer,
+        metrics = perform_ppo_updates(actor_model, optimizer, lr_scheduler,
                                           rollout_buffer, cfg, device)
         log_data = {}
         log_data.update(metrics)

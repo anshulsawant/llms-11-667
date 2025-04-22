@@ -17,7 +17,7 @@ dataset:
 
 # PPO Hyperparameters
 ppo:
-  learning_rate: 1.0e-6
+  learning_rate: 5.0e-7
   epochs: 2        # Optimization epochs per rollout phase
   batch_size: 4     # Rollout batch size (adjust based on VRAM)
   mini_batch_size: 4 # Update mini-batch size (adjust based on VRAM)
@@ -32,6 +32,9 @@ ppo:
   use_8bit_adam: true
   max_grad_norm: 1.0
   rollout_samples: 512
+  scheduler: "cosine_with_min_lr"
+  warmup_steps: 5
+  min_lr: 1.0e-7
 
 # Training Control
 training:
