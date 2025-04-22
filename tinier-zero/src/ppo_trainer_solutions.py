@@ -537,6 +537,19 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
         buffer_lists["ground_truth_answers"].extend(ground_truths)
 
     # --- Collate the buffer lists into single tensors ---
+    individual_lengths = []
+    # Iterate through the list of batch masks
+    for mask_batch in buffer_lists["response_attention_mask"]:
+        if mask_batch.numel() > 0: # Ensure tensor is not empty
+            # Sum along the sequence dimension (dim=1) to get lengths per sequence in the batch
+            lengths_in_batch = mask_batch.sum(dim=1)
+            # Extend the master list with individual lengths from this batch
+            individual_lengths.extend(lengths_in_batch.cpu().numpy()) # Use .numpy() or .tolist()
+
+    avg_resp_len = np.mean(individual_lengths) if individual_lengths else 0.0
+    # Log the correctly calculated average length
+    logger.info(f"Average response length per sequence for this rollout: {avg_resp_len:.2f}")
+
     all_resp_lengths = [mask.sum().item() for mask in buffer_lists["response_attention_mask"]]
     avg_resp_len = np.mean(all_resp_lengths) if all_resp_lengths else 0.0
     logging.info(f"Average response length for this rollout: {avg_resp_len:.2f}")
