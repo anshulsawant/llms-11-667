@@ -482,11 +482,6 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
                      device: torch.device) -> Dict[str, Any]:
     """Generates responses and computes stats for PPO update."""
     # Temporary buffer to store results from each batch before collation
-    rollout_start_time = time.time() # Overall timer
-    total_gen_time = 0.0
-    total_stats_time = 0.0
-    total_cpu_time = 0.0
-    total_batches = 0
 
     buffer_lists = {
         "prompt_input_ids": [],
@@ -506,27 +501,21 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
         if batch is None:  # Handle potential error from collate_fn
             logging.info("Warning: Skipping None batch from dataloader.")
             continue
-        cpu_start_time = time.time() # Start timing CPU prep
         prompt_ids = batch["prompt_input_ids"].to(device)
         prompt_mask = batch["prompt_attention_mask"].to(device)
         ground_truths = batch["ground_truth_answers"]  # List of strings
 
         # 1. Generate responses
-        gen_start_time = time.time()
         response_ids, response_mask = generate_responses(
             actor_model, tokenizer, prompt_ids, prompt_mask,
             gen_config)  # Shapes: (B, R_i), (B, R_i)
-        total_gen_time += (time.time() - gen_start_time)
 
         # 2. Calculate stats (logprobs, values, etc.)
-        stats_start_time = time.time()
         stats = calculate_rollout_stats(
             actor_model, ref_model, tokenizer, prompt_ids, prompt_mask,
             response_ids, response_mask)  # Dict of tensors (B, R_i)
-        total_stats_time += (time.time() - stats_start_time)
 
         # 3. Decode texts and calculate rewards
-        cpu_work_start_time = time.time()
         full_ids = torch.cat((prompt_ids, response_ids), dim=1)
         full_decoded_texts = tokenizer.batch_decode(full_ids,
                                                     skip_special_tokens=True)
@@ -550,7 +539,6 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
         buffer_lists["rewards"].append(rewards)  # Already on CPU
         buffer_lists["full_texts"].extend(full_decoded_texts)
         buffer_lists["ground_truth_answers"].extend(ground_truths)
-        total_cpu_time += (time.time() - cpu_work_start_time) + cpu_prep_time # Add prep time here
 
     # --- Collate the buffer lists into single tensors ---
     individual_lengths = []
@@ -569,7 +557,6 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
     all_resp_lengths = [mask.sum().item() for mask in buffer_lists["response_attention_mask"]]
     avg_resp_len = np.mean(all_resp_lengths) if all_resp_lengths else 0.0
     logging.info(f"Average response length for this rollout: {avg_resp_len:.2f}")
-    collation_start_time = time.time()
     collated_buffer = {}
     padding_value_map = {
         "input_ids":
@@ -609,12 +596,6 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
         else:
             logging.info(f"Warning: Unexpected key '{key}' in buffer collation.")
             collated_buffer[key] = data_list  # Keep as is
-    collation_time = time.time() - collation_start_time
-    rollout_end_time = time.time()
-    rollout_duration = rollout_end_time - rollout_start_time
-
-    # Log the timing breakdown for this step
-    logger.info(f"Rollout Timing Breakdown: Total={rollout_duration:.2f}s | Gen={total_gen_time:.2f}s | Stats={total_stats_time:.2f}s | CPU={total_cpu_time:.2f}s | Collate={collation_time:.2f}s")
 
     return collated_buffer
 
