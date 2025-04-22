@@ -968,7 +968,7 @@ def setup_optimizer(cfg: DictConfig,
             logging.info("Using standard AdamW Optimizer")
         optimizer = AdamW(model.parameters(), lr=lr)
     lr_scheduler = get_scheduler(
-        cfg.ppo.scheduler, optimizer, cfg.warmup_steps,
+        cfg.ppo.scheduler, optimizer, cfg.ppo.warmup_steps,
         num_training_steps=(
             cfg.training.total_ppo_steps *
             ((cfg.ppo.rollout_samples // cfg.ppo.mini_batch_size) //
