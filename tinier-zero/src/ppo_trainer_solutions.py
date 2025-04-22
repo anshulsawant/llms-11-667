@@ -537,6 +537,9 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
         buffer_lists["ground_truth_answers"].extend(ground_truths)
 
     # --- Collate the buffer lists into single tensors ---
+    all_resp_lengths = [mask.sum().item() for mask in buffer_lists["response_attention_mask"]]
+    avg_resp_len = np.mean(all_resp_lengths) if all_resp_lengths else 0.0
+    logging.info(f"Average response length for this rollout: {avg_resp_len:.2f}")
     collated_buffer = {}
     padding_value_map = {
         "input_ids":
@@ -731,8 +734,7 @@ def run_ppo_update_epoch(
                 elif found_zero_grad and not found_none_grad:
                     logging.info("All found gradients are zero (check loss function / saturation).")
                 else:
-                    logging.info("Gradients seem to be computed for trainable parameters.")
-                    logging.info("------------------------------------")
+                    pass
 
         # 6. Store Metrics
         current_metrics = {
