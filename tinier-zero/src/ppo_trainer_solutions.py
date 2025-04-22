@@ -728,15 +728,10 @@ def run_ppo_update_epoch(
                 found_none_grad = True
             elif torch.all(param.grad == 0):
                 # Check if the entire gradient tensor is zero
-                # logger.debug(f"Gradient is all zeros for parameter: {name}") # DEBUG level is appropriate
                 found_zero_grad = True
             else:
                 # Gradient exists and is non-zero
                 found_non_zero_grad = True
-                # Optional NaN/Inf check:
-                # if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-                #     logger.error(f"NaN/Inf gradient found for parameter: {name}")
-                
                 # --- Summary ---
                 if not found_non_zero_grad:
                     logging.critical("No non-zero gradients found for any trainable parameter!")
