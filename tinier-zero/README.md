@@ -114,7 +114,7 @@ tinier-zero/
         *(Note: If you don't need `bitsandbytes` for 8-bit Adam, you can remove it from `requirements.txt` before installing).*
 6. Hugging Face Authentication 
 ```bash
-huggingface-cli login`
+huggingface-cli login
 ```
 5. Login to wandb
    ```bash

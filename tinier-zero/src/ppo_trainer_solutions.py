@@ -131,7 +131,9 @@ def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
 
 
 def compute_gsm8k_reward(generated_text: str, ground_truth_str: str) -> float:
-    """Computes reward: 1.0 if extracted answer matches ground truth, 0 otherwise."""
+    """Computes reward: 1.0 if extracted answer matches ground truth,
+    0.1 if extracted answer is a number (easy reward for getting format right),
+    0 otherwise."""
     extracted_answer_str = extract_gsm8k_solution(generated_text)
     if extracted_answer_str is None: return 0.0
     try:

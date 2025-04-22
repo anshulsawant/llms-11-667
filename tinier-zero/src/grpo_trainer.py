@@ -26,6 +26,10 @@ except ImportError:
     bnb_available = False
 
 from ppo_trainer_solutions import(
+    masked_mean,
+    masked_whiten,
+    compute_gsm8k_reward,
+    extract_gsm8k_solution,
     load_and_preprocess_dataset,
     pad_and_collate_tensors
 )
@@ -51,70 +55,6 @@ import argparse
 import sys
 from typing import List, Dict, Any, Tuple, Optional
 import time # For timing
-
-# ==============================================================================
-# == 1. Helper Functions (Reused from PPO where applicable)
-# ==============================================================================
-
-def masked_mean(tensor: torch.Tensor,
-                mask: Optional[torch.Tensor],
-                dim: Optional[int] = None) -> torch.Tensor:
-    """Calculates mean of tensor elements specified by mask."""
-    if mask is None:
-        return torch.mean(tensor, dim=dim)
-    mask = mask.bool()
-    while mask.dim() < tensor.dim():
-        mask = mask.unsqueeze(-1)
-    mask = mask.expand_as(tensor)
-    masked_tensor = torch.where(
-        mask, tensor,
-        torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
-    mean = masked_tensor.sum(dim=dim) / (mask.sum(dim=dim).float() + 1e-8)
-    return mean
-
-def masked_whiten(tensor: torch.Tensor,
-                  mask: Optional[torch.Tensor],
-                  shift_mean: bool = True) -> torch.Tensor:
-    """Whitens the tensor values specified by the mask."""
-    mask = mask.bool()
-    while mask.dim() < tensor.dim():
-        mask = mask.unsqueeze(-1)
-    mask = mask.expand_as(tensor)
-    mean = masked_mean(tensor, mask, dim=None)
-    masked_tensor_variance = torch.where(
-        mask, (tensor - mean)**2,
-        torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
-    variance = masked_mean(masked_tensor_variance, mask, dim=None)
-    std = torch.sqrt(variance + 1e-8)
-    whitened = (tensor - mean) / std if shift_mean else tensor / std
-    return torch.where(
-        mask, whitened,
-        torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
-
-def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
-    """Extracts the numerical answer from the #### format."""
-    solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
-    if solution_match:
-        potential_answer_str = solution_match.group(1).replace(',', '').replace(' ', '')
-        try: float(potential_answer_str); return potential_answer_str
-        except ValueError: return None
-    else:
-        answer_list = re.findall(r"([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
-        if answer_list:
-            final_answer_str = answer_list[-1].replace(',', '').replace(' ', '')
-            try: float(final_answer_str); return final_answer_str
-            except ValueError: return None
-        else: return None
-
-def compute_gsm8k_reward(generated_text: str, ground_truth_str: str) -> float:
-    """Computes reward: 1.0 if extracted answer matches ground truth, 0 otherwise."""
-    extracted_answer_str = extract_gsm8k_solution(generated_text)
-    if extracted_answer_str is None: return 0.0
-    try:
-        extracted_answer = float(extracted_answer_str)
-        ground_truth = float(ground_truth_str)
-        return 1.0 if math.isclose(extracted_answer, ground_truth) else 0.0
-    except ValueError: return 0.0
 
 # ==============================================================================
 # == 2. Core GRPO Algorithm Components

@@ -30,24 +30,24 @@ grpo:
 ppo:
   learning_rate: 5.0e-7   # Keep low LR for stability even in debug
   epochs: 1             # Only 1 optimization epoch per rollout for speed
-  batch_size: 4           # Rollout batch size (prompts) - SMALL
+  batch_size: 2           # Rollout batch size (prompts) - SMALL
   mini_batch_size: 2      # Update mini-batch size (prompts) - SMALL
-  gradient_accumulation_steps: 2 # Effective update batch size (prompts) = 4 - SMALL
+  gradient_accumulation_steps: 1 # Effective update batch size (prompts) = 4 - SMALL
   kl_coeff: 0.05          # Keep KL penalty for stability check
   clip_ratio: 0.2         # GRPO policy objective clipping
   entropy_coeff: 0.01     # Keep entropy bonus
   gamma: 0.99             # Discount factor (less critical in GRPO but kept)
   use_8bit_adam: false    # Disable 8-bit Adam for CPU
   max_grad_norm: 1.0
-  rollout_samples: 16     # Number of *prompts* per rollout - VERY SMALL
-                          # Total generated samples = 16 * group_size(2) = 32
+  rollout_samples: 2     # Number of *prompts* per rollout - VERY SMALL
+  
   scheduler: "cosine"
   warmup_steps: 2         # Minimal warmup steps for short run
   min_lr: 1.0e-7
 
 # Training Control
 training:
-  total_ppo_steps: 10     # Very few GRPO steps for quick test
+  total_ppo_steps: 2     # Very few GRPO steps for quick test
   seed: 42
   log_interval: 1         # Log every step
   save_interval: 100      # Don't save checkpoints during short debug run
