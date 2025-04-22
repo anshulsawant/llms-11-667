@@ -699,7 +699,6 @@ def run_ppo_update_epoch(
         scaled_loss = loss / cfg.ppo.gradient_accumulation_steps
         scaled_loss.backward()
 
-        logging.info("--- Checking Parameter Gradients ---")
         found_none_grad = False
         found_zero_grad = False
         found_non_zero_grad = False
