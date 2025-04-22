@@ -548,7 +548,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
 
     avg_resp_len = np.mean(individual_lengths) if individual_lengths else 0.0
     # Log the correctly calculated average length
-    logger.info(f"Average response length per sequence for this rollout: {avg_resp_len:.2f}")
+    logging.info(f"Average response length per sequence for this rollout: {avg_resp_len:.2f}")
 
     all_resp_lengths = [mask.sum().item() for mask in buffer_lists["response_attention_mask"]]
     avg_resp_len = np.mean(all_resp_lengths) if all_resp_lengths else 0.0
