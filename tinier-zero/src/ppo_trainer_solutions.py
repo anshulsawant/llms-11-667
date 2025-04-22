@@ -103,32 +103,12 @@ def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
     # The regex captures digits, optional sign, dots, and commas.
     solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
 
-    if solution_match:
-        # Extract the captured group (potential number string)
-        potential_answer_str = solution_match.group(1).replace(',', '').replace(' ', '')
-        # --- ADDED VALIDATION ---
-        # Check if the extracted string is actually a valid number
-        try:
-            float(potential_answer_str)
-            return potential_answer_str # Return only if it's a valid float
-        except ValueError:
+    potential_answer_str = solution_match.group(1).replace(',', '').replace(' ', '')
+    try:
+        float(potential_answer_str)
+        return potential_answer_str # Return only if it's a valid float
+    except ValueError:
             return None # Not a valid number, return None
-        # --- END ADDED VALIDATION ---
-    else:
-        # Fallback: Try finding the *last* potential number string in the whole text
-        answer_list = re.findall(r"([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
-        if answer_list:
-            # Get the last match
-            final_answer_str = answer_list[-1].replace(',', '').replace(' ', '')
-            # Validate if the last match is a number
-            try:
-                float(final_answer_str)
-                return final_answer_str
-            except ValueError:
-                return None # Last "number" wasn't valid
-        else:
-            # No number found anywhere
-            return None
 
 
 def compute_gsm8k_reward(generated_text: str, ground_truth_str: str) -> float:
