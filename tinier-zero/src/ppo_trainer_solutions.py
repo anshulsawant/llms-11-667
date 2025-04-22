@@ -519,6 +519,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
         total_gen_time += (time.time() - gen_start_time)
 
         # 2. Calculate stats (logprobs, values, etc.)
+        stats_start_time = time.time()
         stats = calculate_rollout_stats(
             actor_model, ref_model, tokenizer, prompt_ids, prompt_mask,
             response_ids, response_mask)  # Dict of tensors (B, R_i)
