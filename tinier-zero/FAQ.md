@@ -129,22 +129,27 @@ In short, while a single value per sequence seems simpler, the **per-token value
     * In your script, this is handled by:
         * `final_rewards`: The reward based on the complete generated text (e.g., 1.0 if the math answer is correct, 0 otherwise). This reward is conceptually assigned after the last token $T-1$ is generated.
         * `kl_penalties`: A penalty applied at each step $t$ to discourage the actor model from deviating too much from the reference model. `kl_penalty_t` = `kl_coeff` * (`logprob_actor(a_t|s_t)` - `logprob_ref(a_t|s_t)`).
-        * `token_level_rewards`: The script constructs this internal reward signal. It's mostly zero, except the `final_reward` is assigned to the very last actual token step ($T-1$), and then the `kl_penalty` is subtracted from every step's reward. So, $r_t = -\text{kl\_penalty}_t$ for most $t$, and $r_{T-1} = \text{final\_reward} - \text{kl\_penalty}_{T-1}$.
+        * `token_level_rewards`: The script constructs this internal reward signal. It's mostly zero, except the `final_reward` is assigned to the very last actual token step ($T-1$), and then the `kl_penalty` is subtracted from every step's reward. So, $`r_t = -\text{kl\_penalty}_t`$ for most $t$, and $`r_{T-1} = \text{final\_reward} - \text{kl\_penalty}_{T-1}`$.
 
 ### Advantage Estimation: Why GAE?
 
-The goal of PPO is to increase the probability of actions that lead to *better-than-expected* outcomes. We need a way to estimate this "better-than-expected" value, which is the **Advantage** ($A(s_t, a_t)$).
+The goal of PPO is to increase the probability of actions that lead to *better-than-expected* outcomes. We need a way to estimate this "better-than-expected" value, which is the **Advantage** ( $`A(s_t, a_t)`$ ).
 
 * **Simple Idea (TD Error):** A basic estimate is the Temporal Difference (TD) error:
-    $$ \delta_t = r_t + \gamma V(s_{t+1}) - V(s_t) $$
-    This measures the difference between the reward we got ($r_t$) plus the discounted value of the next state ($\gamma V(s_{t+1})$) and what we expected from the current state ($V(s_t)$). It's a one-step lookahead advantage. It has *low variance* (because it relies heavily on the learned value function $V$) but can be *biased* if $V$ is inaccurate.
 
-* **Another Idea (Monte Carlo):** We could calculate the actual full discounted return $G_t = r_t + \gamma r_{t+1} + \gamma^2 r_{t+2} + \dots$ from step $t$ onwards and compare it to the baseline $V(s_t)$: $A_t = G_t - V(s_t)$. This is *unbiased* but can have very *high variance*, making learning unstable.
+```math
+	\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t)
+```	
+    This measures the difference between the reward we got ($`r_t`$) plus the discounted value of the next state ($`\gamma V(s_{t+1})`$) and what we expected from the current state ($`V(s_t)`$). It's a one-step lookahead advantage. It has *low variance* (because it relies heavily on the learned value function $V$) but can be *biased* if $V$ is inaccurate.
+
+* **Another Idea (Monte Carlo):** We could calculate the actual full discounted return $`G_t = r_t + \gamma r_{t+1} + \gamma^2 r_{t+2} + \dots`$ from step $t$ onwards and compare it to the baseline $`V(s_t)$: $A_t = G_t - V(s_t)`$. This is *unbiased* but can have very *high variance*, making learning unstable.
 
 * **GAE (The Compromise):** Generalized Advantage Estimation combines these ideas using a parameter $\lambda$ (`lam` in the code) to balance bias and variance. The GAE formula is essentially a geometrically decaying sum of TD errors:
-    $$ A_t^{GAE} = \delta_t + (\gamma \lambda) \delta_{t+1} + (\gamma \lambda)^2 \delta_{t+2} + \dots = \sum_{l=0}^{\infty} (\gamma \lambda)^l \delta_{t+l} $$
-    * If $\lambda = 0$, $A_t^{GAE} = \delta_t$ (TD Error).
-    * If $\lambda = 1$, $A_t^{GAE}$ approximates the Monte Carlo advantage $G_t - V(s_t)$.
+	```math
+	A_t^{GAE} = \delta_t + (\gamma \lambda) \delta_{t+1} + (\gamma \lambda)^2 \delta_{t+2} + \dots = \sum_{l=0}^{\infty} (\gamma \lambda)^l \delta_{t+l}
+	```
+    * If $\lambda = 0$, $`A_t^{GAE} = \delta_t`$ (TD Error).
+    * If $\lambda = 1$, $`A_t^{GAE}$ approximates the Monte Carlo advantage G_t - V(s_t)`$.
     * Values between 0 and 1 interpolate, often providing a good balance ($\lambda=0.95$ is common).
 
 The "peculiar" GAE formula arises naturally as an exponentially weighted average of TD errors, providing a mechanism (controlled by $\lambda$) to smoothly interpolate between the low-variance, high-bias TD advantage ($\lambda=0$) and the high-variance, low-bias Monte Carlo advantage ($\lambda=1$).
