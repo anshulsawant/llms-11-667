@@ -382,12 +382,14 @@ The entropy calculated is the **Shannon entropy** of the probability distributio
 Given the logits $z = (z_1, z_2, \dots, z_V)$ for a specific token position (where $V$ is the vocabulary size), the steps are:
 
 1.  **Convert Logits to Probabilities (Softmax):** First, the logits are converted into probabilities $p = (p_1, p_2, \dots, p_V)$ using the softmax function:
-    $$ p_i = \text{softmax}(z)_i = \frac{\exp(z_i)}{\sum_{j=1}^{V} \exp(z_j)} $$
-    This ensures all $p_i$ are non-negative and sum to 1, forming a valid probability distribution.
+
+	$$ p_i = \text{softmax}(z)_i = \frac{\exp(z_i)}{\sum_{j=1}^{V} \exp(z_j)} $$
+	This ensures all $p_i$ are non-negative and sum to 1, forming a valid probability distribution.
 
 2.  **Calculate Entropy:** The entropy $H(p)$ for that probability distribution $p$ is calculated using the formula:
-    $$ H(p) = - \sum_{i=1}^{V} p_i \log(p_i) $$
-    Where $\log$ typically denotes the natural logarithm (ln). By convention, $0 \times \log(0)$ is taken to be 0.
+
+	$$ H(p) = - \sum_{i=1}^{V} p_i \log(p_i) $$
+	Where $\log$ typically denotes the natural logarithm (ln). By convention, $0 \times \log(0)$ is taken to be 0.
 
 **Role of Entropy Loss:**
 
@@ -405,10 +407,10 @@ In PPO, we typically add an "entropy bonus" to the objective function, which mea
 And the entropy bonus in the PPO objective leverages this by rewarding higher entropy, thus encouraging the **exploration** associated with lower confidence states or pushing the policy to not become overly confident too quickly.
 
 ## 20. Why do we take tokens from `(prompt_len - 1): (prompt_len + resp_len -1)` for responses?
+	
+Okay, let's break down that slicing: `[prompt_len - 1 : prompt_len + resp_len - 1]`.
 
-	Okay, let's break down that slicing: `[prompt_len - 1 : prompt_len + resp_len - 1]`.
-
-	We need to understand how the outputs of a transformer (logits, values) align with the input sequence. Let's represent the combined sequence as:
+We need to understand how the outputs of a transformer (logits, values) align with the input sequence. Let's represent the combined sequence as:
 ```text
 	`Input Tokens: [P_0, P_1, ..., P_{p-1}, R_0, R_1, ..., R_{r-1}]`
 	`Indices: [ 0 , 1 , ..., p-1 , p , p+1, ..., p+r-1]`
@@ -419,28 +421,28 @@ And the entropy bonus in the PPO objective leverages this by rewarding higher en
 	r = resp_len
 	P_i are prompt tokens, R_i are response tokens.
 ```
-	The total length is p + r.
-	Now, consider the model's outputs at a given index t:
-	logits[:, t, :]: These logits are used to predict the next token, i.e., token t+1.
-	values[:, t]: This represents the value function estimate `V(s_t)` for the state reached after processing tokens up to index `t-1`. It's the value of the state before the model processes token `t` or predicts token `t+1`.
-	We are interested in the losses associated with generating the response tokens `R_0 to R_{r-1}`.
+The total length is p + r.
+Now, consider the model's outputs at a given index t:
+logits[:, t, :]: These logits are used to predict the next token, i.e., token t+1.
+values[:, t]: This represents the value function estimate `V(s_t)` for the state reached after processing tokens up to index `t-1`. It's the value of the state before the model processes token `t` or predicts token `t+1`.
+We are interested in the losses associated with generating the response tokens `R_0 to R_{r-1}`.
+	
+For the first response token `R_0` (at index `p`):
 
-	For the first response token `R_0` (at index `p`):
-
-	The logits needed to predict `R_0` are generated after processing the entire prompt, which ends at index p-1. So, we need `logits[:, p-1, :]`.
+The logits needed to predict `R_0` are generated after processing the entire prompt, which ends at index p-1. So, we need `logits[:, p-1, :]`.
 	The value associated with the state before generating `R_0` is the value after processing the prompt. This is `values[:, p-1]`.
 	For the second response token `R_1` (at index p+1):
 
-	The logits needed to predict R_1 are generated after processing the prompt and R_0 (up to index p). So, we need logits[:, p, :].
-	The value associated with the state before generating R_1 is the value after processing the prompt and R_0. This is values[:, p].
-	For the last response token R_{r-1} (at index p+r-1):
+The logits needed to predict `R_1` are generated after processing the prompt and R_0 (up to index p). So, we need logits[:, p, :].
+The value associated with the state before generating `R_1` is the value after processing the prompt and R_0. This is values[:, p].
+For the last response token R_{r-1} (at index p+r-1):
 
-	The logits needed to predict R_{r-1} are generated after processing up to R_{r-2} (index p+r-2). So, we need logits[:, p+r-2, :].
-	The value associated with the state before generating R_{r-1} is the value after processing up to R_{r-2}. This is values[:, p+r-2].
-	Therefore, to get the relevant logits and values for the entire response sequence (R_0 to R_{r-1}), we need to slice the outputs from index p-1 up to (and including) index p+r-2.
+The logits needed to predict `R_{r-1}` are generated after processing up to `R_{r-2} (index p+r-2)`. So, we need logits[:, p+r-2, :].
+The value associated with the state before generating `R_{r-1}` is the value after processing up to `R_{r-2}`. This is values[:, p+r-2].
+Therefore, to get the relevant logits and values for the entire response sequence (R\_0 to R_{r-1}), we need to slice the outputs from index p-1 up to (and including) index p+r-2.
 
-	In Python slicing notation:
+In Python slicing notation:
 
-	Start index: p-1 (which is prompt_len - 1)
-	End index (exclusive): p+r-1 (which is prompt_len + resp_len - 1)
-	So, the slice [prompt_len - 1 : prompt_len + resp_len - 1] correctly selects the sequence of logits and values corresponding to the states immediately preceding each token generation within the response sequence.
+Start index: p-1 (which is prompt\_len - 1)
+End index (exclusive): p+r-1 (which is prompt\_len + resp_len - 1)
+So, the slice [prompt\_len - 1 : prompt\_len + resp_len - 1] correctly selects the sequence of logits and values corresponding to the states immediately preceding each token generation within the response sequence.
