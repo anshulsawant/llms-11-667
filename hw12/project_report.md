@@ -201,7 +201,7 @@ Qualitative analysis comparing the base model, the best SFT model (Full SFT Main
 
 The PPO training stage, while ultimately not improving test set accuracy, exhibited typical RL training dynamics as observed in the WandB logs.
 
-![PPO Training](./ppo.png PPO Training Charts)
+![](ppo.png)
 
 * **Rewards:** Metrics like `ppo/mean_reward` (total reward) and `ppo/mean_scores` (task-specific reward component, derived from the exact match check) generally showed noisy but potentially slightly increasing trends over the 100 PPO steps, indicating the policy was learning to achieve higher rewards according to the defined function.
 * **Value Function:** The value function loss (`ppo/val/vferr`) typically decreased, showing the value network was learning to predict expected returns.
