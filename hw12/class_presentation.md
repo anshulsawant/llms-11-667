@@ -17,8 +17,15 @@
     * Evaluated on a 256-sample test set (derived from untouched test split).
 
 ---
+# Slide 3: Bonus
 
-# Slide 3: Key Insight 1: Training Data Matters More Than Training Loss!
+* **Tinier-Zero** Learning resource developed as part of this project in collaboration with Gemini 2.5 Pro.
+* From scratch, **single file PPO implementation**.
+* Pedagogical part WIP, but still useful.
+* https://github.com/anshulsawant/llms-11-667/tree/main/tinier-zero
+
+---
+# Slide 4: Key Insight 1: Training Data Matters More Than Training Loss!
 
 * **Experiment:** We fine-tuned using two GSM8K variants:
     * `main`: Standard Q&A with reasoning.
@@ -30,7 +37,7 @@
 
 ---
 
-# Slide 4: Key Insight 2: Fine-Tuning Trade-offs & RL Challenges
+# Slide 5: Key Insight 2: Fine-Tuning Trade-offs & RL Challenges
 
 * **Comparing Methods (Accuracy %):**
     * Base Model (ICL One-Shot + Instruction): 6%
@@ -44,12 +51,3 @@
     * Applying PPO with a direct exact match reward *did not* improve upon the SFT result and even slightly decreased accuracy.
     * Qualitative analysis showed PPO fixed one SFT error but introduced *new* errors/regressions on other problems.
 * **Takeaway for Class:** Fine-tuning is powerful but has trade-offs (Full vs. PEFT). RL alignment is complex; optimizing directly for a metric doesn't guarantee better overall reasoning and can even cause regressions without careful reward design and tuning. Debugging interactions (e.g., LoRA + Gradient Checkpointing) is often required.
-
----
-
-# Slide 5: Bonus
-
-* **Tinier-Zero** Learning resource developed as part of this project in collaboration with Gemini 2.5 Pro.
-* From scratch, **single file PPO implementation**.
-* Pedagogical part WIP, but still useful.
-* https://github.com/anshulsawant/llms-11-677/tinier-zero
