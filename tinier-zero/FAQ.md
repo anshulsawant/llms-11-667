@@ -261,7 +261,7 @@ Here's why PPO updates are still valuable even with zero task rewards in a given
 Skipping updates based on low immediate rewards would starve the value function of necessary learning targets and ignore the stabilizing influence of the KL penalty. The algorithm is designed to learn from the *entire* trajectory and its comparison to expected values, not just from immediate task success.
 
 
-## 14. How do I know that training is converging?
+## 13. How do I know that training is converging?
 
 Based on the metrics calculated and logged in your script (`ppo_refactored_exercise.py`), here's a summary of what to look for again:
 
@@ -273,7 +273,7 @@ Based on the metrics calculated and logged in your script (`ppo_refactored_exerc
 
 In short: Look primarily for the **reward to plateau while the value loss stabilizes at a low level, and the KL divergence remains bounded**. Supplement this with checks on the actual model outputs. The GAE calculation itself (the code block you selected) doesn't directly indicate convergence, but its outputs (advantages/returns) drive the losses you monitor.
 
-## 15. What is the purpose of more randomization (say compared to, if I wanted to get the right answers in gsm8k) in generations from the actor model?
+## 14. What is the purpose of more randomization (say compared to, if I wanted to get the right answers in gsm8k) in generations from the actor model?
 
 That's a key question that gets to the heart of Reinforcement Learning! You're right, if your only goal was to get the highest number of correct GSM8K answers *right now* using the current model, you'd likely use greedy decoding or beam search (minimal randomization).
 
