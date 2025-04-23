@@ -436,7 +436,6 @@ def run_grpo_update_epoch(
 
     # Iterate through prompts for mini-batching
     for i in range(0, num_prompts, cfg.ppo.mini_batch_size): # Use ppo.mini_batch_size for prompt batching
-        optimizer_step_in_batch = 0
         prompt_batch_indices = prompt_indices[i:i + cfg.ppo.mini_batch_size]
         actual_mini_batch_size_prompts = len(prompt_batch_indices)
         if actual_mini_batch_size_prompts == 0: continue
@@ -504,7 +503,7 @@ def run_grpo_update_epoch(
         # Accumulate based on prompt mini-batch size
         scaled_loss = loss / cfg.ppo.gradient_accumulation_steps
         scaled_loss.backward()
-        optimizer_step_in_batch += 1 # Increment steps within this prompt batch
+        ppo_step_count += 1 # Increment steps within this prompt batch
 
         # 6. Store Metrics
         current_metrics = {
@@ -518,8 +517,7 @@ def run_grpo_update_epoch(
             aggregate_metrics.setdefault(key, []).append(val)
 
         # 7. Optimizer Step (if accumulation cycle complete)
-        if optimizer_step_in_batch % cfg.ppo.gradient_accumulation_steps == 0:
-            ppo_step_count +=1 # Count optimizer steps globally
+        if ppo_step_count % cfg.ppo.gradient_accumulation_steps == 0:
             grads_exist = any(p.grad is not None for p in actor_model.parameters() if p.requires_grad)
             if grads_exist:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
