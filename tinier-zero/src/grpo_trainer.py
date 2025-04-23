@@ -533,6 +533,7 @@ def run_grpo_update_epoch(
 
     # --- End of Epoch ---
     final_metrics = {key: np.mean(val) for key, val in aggregate_metrics.items() if val}
+    logger.info(final_metrics)
     return final_metrics
 
 
