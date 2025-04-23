@@ -56,6 +56,7 @@ import pickle
 
 # --- Import Accelerate ---
 from accelerate import Accelerator, DistributedDataParallelKwargs
+import accelerate
 
 # ==============================================================================
 # == 1. Helper Functions (Unchanged from previous GRPO version)

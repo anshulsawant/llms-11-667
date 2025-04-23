@@ -19,6 +19,7 @@ except ImportError:
     bnb_available = False
 
 from transformers import (
+    get_scheduler,
     AutoTokenizer,
     AutoModelForCausalLM,
     GenerationConfig,
@@ -39,12 +40,14 @@ import argparse
 import sys
 from typing import List, Dict, Any, Tuple, Optional
 
-
 # ==============================================================================
-# == 1. Helper Functions (Masking, Reward, Padding) - PROVIDED
+# == 1. Helper Functions (Masking, Reward, Padding)
 # ==============================================================================
 
-def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: Optional[int] = None) -> torch.Tensor:
+
+def masked_mean(tensor: torch.Tensor,
+                mask: Optional[torch.Tensor],
+                dim: Optional[int] = None) -> torch.Tensor:
     """Calculates mean of tensor elements specified by mask."""
     if mask is None:
         return torch.mean(tensor, dim=dim)
@@ -52,13 +55,19 @@ def masked_mean(tensor: torch.Tensor, mask: Optional[torch.Tensor], dim: Optiona
     # Expand mask dimensions if necessary
     while mask.dim() < tensor.dim():
         mask = mask.unsqueeze(-1)
-    mask = mask.expand_as(tensor) # Ensure shapes match
+    mask = mask.expand_as(tensor)  # Ensure shapes match
 
-    masked_tensor = torch.where(mask, tensor, torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
-    mean = masked_tensor.sum(dim=dim) / (mask.sum(dim=dim).float() + 1e-8) # Add epsilon for stability
+    masked_tensor = torch.where(
+        mask, tensor,
+        torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
+    mean = masked_tensor.sum(dim=dim) / (mask.sum(dim=dim).float() + 1e-8
+                                         )  # Add epsilon for stability
     return mean
 
-def masked_whiten(tensor: torch.Tensor, mask: Optional[torch.Tensor], shift_mean: bool = True) -> torch.Tensor:
+
+def masked_whiten(tensor: torch.Tensor,
+                  mask: Optional[torch.Tensor],
+                  shift_mean: bool = True) -> torch.Tensor:
     """Whitens the tensor values specified by the mask."""
     mask = mask.bool()
     while mask.dim() < tensor.dim():
@@ -66,12 +75,17 @@ def masked_whiten(tensor: torch.Tensor, mask: Optional[torch.Tensor], shift_mean
     mask = mask.expand_as(tensor)
 
     mean = masked_mean(tensor, mask, dim=None)
-    masked_tensor_variance = torch.where(mask, (tensor - mean)**2, torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
+    masked_tensor_variance = torch.where(
+        mask, (tensor - mean)**2,
+        torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
     variance = masked_mean(masked_tensor_variance, mask, dim=None)
-    std = torch.sqrt(variance + 1e-8) # Add epsilon for stability
+    std = torch.sqrt(variance + 1e-8)  # Add epsilon for stability
 
     whitened = (tensor - mean) / std if shift_mean else tensor / std
-    return torch.where(mask, whitened, torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
+    return torch.where(
+        mask, whitened,
+        torch.tensor(0.0, device=tensor.device, dtype=tensor.dtype))
+
 
 def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
     """Extracts the numerical answer from the #### format.
@@ -81,45 +95,30 @@ def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
     # Use strict method first: Search for #### followed by a potential number
     # The regex captures digits, optional sign, dots, and commas.
     solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
+    solution = '' if solution_match is None else solution_match.group(1) 
+    try:
+        float(solution) 
+        return solution
+    except ValueError:
+        return None # Not a valid number, return None
 
-    if solution_match:
-        # Extract the captured group (potential number string)
-        potential_answer_str = solution_match.group(1).replace(',', '').replace(' ', '')
-        # --- ADDED VALIDATION ---
-        # Check if the extracted string is actually a valid number
-        try:
-            float(potential_answer_str)
-            return potential_answer_str # Return only if it's a valid float
-        except ValueError:
-            return None # Not a valid number, return None
-        # --- END ADDED VALIDATION ---
-    else:
-        # Fallback: Try finding the *last* potential number string in the whole text
-        answer_list = re.findall(r"([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
-        if answer_list:
-            # Get the last match
-            final_answer_str = answer_list[-1].replace(',', '').replace(' ', '')
-            # Validate if the last match is a number
-            try:
-                float(final_answer_str)
-                return final_answer_str
-            except ValueError: return None
-        else: return None
 
 def compute_gsm8k_reward(generated_text: str, ground_truth_str: str) -> float:
-    """Computes reward: 1.0 if extracted answer matches ground truth, 0 otherwise."""
+    """Computes reward: 1.0 if extracted answer matches ground truth,
+    0.1 if extracted answer is a number (easy reward for getting format right),
+    0 otherwise."""
     extracted_answer_str = extract_gsm8k_solution(generated_text)
     if extracted_answer_str is None: return 0.0
     try:
         extracted_answer = float(extracted_answer_str)
         ground_truth = float(ground_truth_str)
-        return 1.0 if math.isclose(extracted_answer, ground_truth) else 0.0
-    except ValueError: return 0.0 # Handle non-numeric cases
+        return 1.0 if math.isclose(extracted_answer, ground_truth) else 0.1
+    except ValueError:
+        return 0.0  # Handle non-numeric cases
 
-def pad_and_collate_tensors(
-    tensor_list: List[torch.Tensor],
-    padding_value: float = 0.0
-) -> torch.Tensor:
+
+def pad_and_collate_tensors(tensor_list: List[torch.Tensor],
+                            padding_value: float = 0.0) -> torch.Tensor:
     """
     Pads tensors in a list to the maximum length of the second dimension
     and concatenates them along the first dimension.
@@ -134,7 +133,8 @@ def pad_and_collate_tensors(
         # Return shape (TotalB, 0, ...) matching original dims > 1
         original_shape = tensor_list[0].shape
         return torch.empty((total_batch_size, 0) + original_shape[2:],
-                            dtype=tensor_list[0].dtype, device=tensor_list[0].device)
+                           dtype=tensor_list[0].dtype,
+                           device=tensor_list[0].device)
 
     # Pad each tensor and collect in a new list
     padded_list = []
@@ -480,7 +480,7 @@ class ActorModelWithValueHead(nn.Module):
 
 
 # ==============================================================================
-# == 4. Rollout Phase Logic - PROVIDED (Uses Modular Functions)
+# == 4. Rollout Phase Logic
 # ==============================================================================
 
 def generate_responses(
@@ -515,7 +515,7 @@ def calculate_rollout_stats(
     response_ids: torch.Tensor,    # Shape (batch, resp_len)
     response_mask: torch.Tensor    # Shape (batch, resp_len)
 ) -> Dict[str, torch.Tensor]:
-    """Calculates logprobs, ref_logprobs, values for a batch."""
+    """Calculates logprobs, ref_logprobs, values, and rewards for a batch."""
     actor_model.eval()
     ref_model.eval()
     with torch.no_grad():
@@ -602,9 +602,9 @@ def perform_rollouts(
 
     progress_bar = tqdm(prompt_dataloader, desc="Rollout", leave=False)
     for batch in progress_bar:
-        if batch is None: # Handle potential error from collate_fn
-             print("Warning: Skipping None batch from dataloader.")
-             continue
+        if batch is None:  # Handle potential error from collate_fn
+            logging.info("Warning: Skipping None batch from dataloader.")
+            continue
         prompt_ids = batch["prompt_input_ids"].to(device)
         prompt_mask = batch["prompt_attention_mask"].to(device)
         ground_truths = batch["ground_truth_answers"] # List of strings
@@ -624,9 +624,13 @@ def perform_rollouts(
         full_ids = torch.cat((prompt_ids, response_ids), dim=1)
         full_decoded_texts = tokenizer.batch_decode(full_ids, skip_special_tokens=True)
         rewards = torch.tensor(
-            [compute_gsm8k_reward(txt, gt) for txt, gt in zip(full_decoded_texts, ground_truths)],
-            dtype=torch.float32, device='cpu' # Calculate reward on CPU
-        ) # Shape: (B,)
+            [
+                compute_gsm8k_reward(txt, gt)
+                for txt, gt in zip(full_decoded_texts, ground_truths)
+            ],
+            dtype=torch.float32,
+            device='cpu'  # Calculate reward on CPU
+        )  # Shape: (B,)
 
         # 4. Append results to buffer lists (moving tensors to CPU)
         buffer_lists["prompt_input_ids"].append(prompt_ids.cpu())
@@ -641,6 +645,18 @@ def perform_rollouts(
         buffer_lists["ground_truth_answers"].extend(ground_truths)
 
     # --- Collate the buffer lists into single tensors ---
+    individual_lengths = []
+    # Iterate through the list of batch masks
+    for mask_batch in buffer_lists["response_attention_mask"]:
+        if mask_batch.numel() > 0: # Ensure tensor is not empty
+            # Sum along the sequence dimension (dim=1) to get lengths per sequence in the batch
+            lengths_in_batch = mask_batch.sum(dim=1)
+            # Extend the master list with individual lengths from this batch
+            individual_lengths.extend(lengths_in_batch.cpu().numpy()) # Use .numpy() or .tolist()
+
+    avg_resp_len = np.mean(individual_lengths) if individual_lengths else 0.0
+
+    logging.info(f"Average response length for this rollout: {avg_resp_len:.2f}")
     collated_buffer = {}
     padding_value_map = {
         "input_ids": tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0,
@@ -664,32 +680,32 @@ def perform_rollouts(
             # Determine padding value
             pad_val = 0.0
             for suffix, val in padding_value_map.items():
-                if key.endswith(suffix): pad_val = val; break
+                if key.endswith(suffix):
+                    pad_val = val
+                    break
             # Pad list elements to max seq len and concatenate
-            try:
-                collated_buffer[key] = pad_and_collate_tensors(data_list, padding_value=pad_val)
-            except (TypeError, ValueError) as e:
-                 print(f"Error during collation padding/concat for key '{key}': {e}")
-                 collated_buffer[key] = torch.empty(0) # Assign empty on error
+            collated_buffer[key] = pad_and_collate_tensors(
+                data_list, padding_value=pad_val)
         else:
-            print(f"Warning: Unexpected key '{key}' in buffer collation.")
-            collated_buffer[key] = data_list # Keep as is
+            logging.info(f"Warning: Unexpected key '{key}' in buffer collation.")
+            collated_buffer[key] = data_list  # Keep as is
 
     return collated_buffer
 
 
 # ==============================================================================
-# == 5. PPO Update Phase Logic - EXERCISE in run_ppo_update_epoch
+# == 5. PPO Update Phase Logic
 # ==============================================================================
 
 # --- EXERCISE 5 START (Inside run_ppo_update_epoch) ---
 def run_ppo_update_epoch(
-    actor_model: ActorModelWithValueHead,
-    optimizer: torch.optim.Optimizer,
-    collated_buffer: Dict[str, torch.Tensor], # Assumes tensors are on correct device
-    cfg: DictConfig,
-    device: torch.device
-) -> Dict[str, float]:
+        actor_model: ActorModelWithValueHead,
+        optimizer: torch.optim.Optimizer,
+        lr_scheduler,
+        collated_buffer: Dict[
+            str, torch.Tensor],  # Assumes tensors are on correct device
+        cfg: DictConfig,
+        device: torch.device) -> Dict[str, float]:
     """Runs one PPO epoch with mini-batch updates."""
     actor_model.train()
     aggregate_metrics = {}
@@ -713,11 +729,11 @@ def run_ppo_update_epoch(
     with torch.no_grad():
         kl_per_token = logprobs_old - ref_logprobs
         kl_penalties = cfg.ppo.kl_coeff * kl_per_token
-        # --- USES EXERCISE 4 ---
-        advantages, returns = compute_gae_advantages(
-            final_rewards, kl_penalties, values_old, response_mask,
-            cfg.ppo.gamma, cfg.ppo.lam
-        )
+        advantages, returns = compute_gae_advantages(final_rewards,
+                                                     kl_penalties, values_old,
+                                                     response_mask,
+                                                     cfg.ppo.gamma,
+                                                     cfg.ppo.lam)
 
     # --- Mini-batch Loop ---
     num_samples = full_input_ids.shape[0]
@@ -776,81 +792,86 @@ def run_ppo_update_epoch(
         #
         # 9. Optimizer Step (Handled outside this section based on grad accum count)
 
-        print(f"Warning: PPO Mini-batch update logic {i // cfg.ppo.mini_batch_size} not implemented!") # Remove this line
-        # Dummy forward/backward to allow script execution without full implementation
-        try:
-            logits_new, values_new = actor_model(batch_full_ids, attention_mask=batch_full_mask)
-            dummy_loss = logits_new.mean() * 0.0 + values_new.mean() * 0.0 # Dummy loss based on outputs
-            scaled_loss = dummy_loss / cfg.ppo.gradient_accumulation_steps
-            scaled_loss.backward()
-            # Store dummy metrics
-            current_metrics = {
-                'loss/policy': [0.0], 'loss/value': [0.0], 'loss/entropy': [0.0], 'loss/total': [0.0],
-                'params/policy_clip_frac': [0.0], 'params/value_clip_frac': [0.0], 'params/approx_kl': [0.0]
-            }
-            for key, val_list in current_metrics.items():
-                aggregate_metrics.setdefault(key, []).extend(val_list)
-        except Exception as e_dummy:
-            print(f"Dummy forward/backward failed in update loop: {e_dummy}")
+        # Check shape consistency before gather
+        if logits_new_resp.shape[1] != batch_response_tokens.shape[1]:
+            print(
+                f"Warning: Mismatch logits/response len in PPO update. Skipping mini-batch {i // cfg.ppo.mini_batch_size}."
+            )
+            continue
 
 
-        # --- Optimizer Step (Handled outside the exercise block) ---
+        # 7. Optimizer Step (if accumulation cycle complete)
         if ppo_step_count % cfg.ppo.gradient_accumulation_steps == 0:
-            grads_exist = any(p.grad is not None for p in actor_model.parameters() if p.requires_grad)
+            # Check if grads exist before clipping/stepping
+            grads_exist = any(p.grad is not None
+                              for p in actor_model.parameters()
+                              if p.requires_grad)
             if grads_exist:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     actor_model.parameters(), max_norm=cfg.ppo.max_grad_norm)
                 aggregate_metrics.setdefault('params/grad_norm', []).append(grad_norm.item())
                 optimizer.step()
+                lr_scheduler.step()
+            # Zero grad AFTER potential step
             optimizer.zero_grad(set_to_none=True)
 
     # --- End of Epoch ---
-    final_metrics = {key: np.mean(val) for key, val in aggregate_metrics.items() if val}
+    # Average metrics over the epoch
+    final_metrics = {
+        key: np.mean(val)
+        for key, val in aggregate_metrics.items() if val
+    }
     return final_metrics
 # --- EXERCISE 5 END ---
 
 
 def perform_ppo_updates(
-    actor_model: ActorModelWithValueHead,
-    optimizer: torch.optim.Optimizer,
-    rollout_buffer: Dict[str, Any], # Can contain lists or tensors
-    cfg: DictConfig,
-    device: torch.device
-) -> Dict[str, float]:
+        actor_model: ActorModelWithValueHead,
+        optimizer: torch.optim.Optimizer,
+        lr_scheduler,
+        rollout_buffer: Dict[str, Any],  # Can contain lists or tensors
+        cfg: DictConfig,
+        device: torch.device) -> Dict[str, float]:
     """Performs multiple PPO epochs on the collected rollout data."""
     # Move collated tensors from buffer to the training device
+    # This assumes collation happened correctly and produced tensors
     try:
         buffer_on_device = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
             for k, v in rollout_buffer.items()
         }
     except AttributeError as e:
-         print(f"Error moving buffer to device, likely due to non-tensor data: {e}")
-         print("Rollout Buffer Contents (Keys and Types):")
-         for k, v in rollout_buffer.items(): print(f"  {k}: {type(v)}")
-         return {} # Cannot proceed
+        print(
+            f"Error moving buffer to device, likely due to non-tensor data: {e}"
+        )
+        # Print buffer keys and types for debugging
+        logging.info("Rollout Buffer Contents (Keys and Types):")
+        for k, v in rollout_buffer.items():
+            logging.info(f"  {k}: {type(v)}")
+        return {}  # Cannot proceed
 
     # Basic validation after moving to device
     if "response_input_ids" not in buffer_on_device or \
        not isinstance(buffer_on_device["response_input_ids"], torch.Tensor) or \
        buffer_on_device["response_input_ids"].numel() == 0:
-        print("Warning: No response tokens found in buffer on device. Skipping PPO update.")
+        print(
+            "Warning: No response tokens found in buffer on device. Skipping PPO update."
+        )
         return {}
 
     all_epoch_metrics = {}
     for ppo_epoch in range(cfg.ppo.epochs):
-        # --- Calls EXERCISE 5 logic ---
-        epoch_metrics = run_ppo_update_epoch(
-            actor_model, optimizer, buffer_on_device, cfg, device
-        )
-        # Store metrics from the last epoch
-        all_epoch_metrics = epoch_metrics
+        epoch_metrics = run_ppo_update_epoch(actor_model, optimizer, lr_scheduler,
+                                             buffer_on_device, cfg, device)
+        # Aggregate metrics across epochs (e.g., average or store last)
+        # Here, we just store the metrics from the last epoch for simplicity
+        all_epoch_metrics = epoch_metrics  # Overwrite with last epoch's metrics
 
     return all_epoch_metrics
 
 
 # ==============================================================================
-# == 6. Training Setup and Orchestration - PROVIDED
+# == 6. Training Setup and Orchestration
 # ==============================================================================
 
 def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
@@ -862,15 +883,19 @@ def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
     if cfg.training.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
         torch.cuda.manual_seed_all(cfg.training.seed)
-        print(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
+        logging.info(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
     else:
-        if cfg.training.device == "cuda": print("Warning: CUDA requested but unavailable, using CPU.")
+        if cfg.training.device == "cuda":
+            logging.info("Warning: CUDA requested but unavailable, using CPU.")
         device = torch.device("cpu")
-    print(f"Using device: {device}")
+    logging.info(f"Using device: {device}")
 
     output_dir = cfg.training.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    print(f"Output directory: {output_dir}")
+    logging.info(f"Output directory: {output_dir}")
+    # Save config (optional, can be done in main train loop)
+    # try: OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
+    # except Exception as e: logging.info(f"Error saving config: {e}")
 
     return device, output_dir
 
@@ -878,27 +903,32 @@ def load_models_and_tokenizer(cfg: DictConfig, device: torch.device) -> Tuple[
     ActorModelWithValueHead, PreTrainedModel, PreTrainedTokenizerBase
 ]:
     """Loads tokenizer, actor model (with value head), and reference model."""
-    print(f"Loading tokenizer: {cfg.model.tokenizer_name}")
+    logging.info(f"Loading tokenizer: {cfg.model.tokenizer_name}")
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.tokenizer_name)
     # --- Set Padding Token ---
     if tokenizer.pad_token is None or tokenizer.pad_token_id is None:
-        print("Setting pad_token to eos_token.")
+        logging.info("Setting pad_token to eos_token.")
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
     # Explicitly set padding side (optional, default is often right)
     # tokenizer.padding_side = 'left' # Uncomment to use left padding
 
-    print(f"Loading models: {cfg.model.name}")
+    logging.info(f"Loading models: {cfg.model.name}")
     # --- Model Kwargs (dtype, quantization, etc.) ---
     model_kwargs = {}
     model_dtype_str = cfg.model.get("torch_dtype", "auto")
     if model_dtype_str != "auto":
-        try: model_kwargs["torch_dtype"] = getattr(torch, model_dtype_str)
-        except AttributeError: print(f"Warning: Invalid torch_dtype '{model_dtype_str}'. Using auto.")
-    if cfg.model.get("trust_remote_code", False): model_kwargs["trust_remote_code"] = True
+        try:
+            model_kwargs["torch_dtype"] = getattr(torch, model_dtype_str)
+        except AttributeError:
+            print(
+                f"Warning: Invalid torch_dtype '{model_dtype_str}'. Using auto."
+            )
+    if cfg.model.get("trust_remote_code", False):
+        model_kwargs["trust_remote_code"] = True
     if cfg.model.get("quantization"):
         q_cfg = cfg.model.quantization
-        print(f"Applying quantization: {q_cfg}")
+        logging.info(f"Applying quantization: {q_cfg}")
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
              load_in_8bit=q_cfg.get("load_in_8bit", False), load_in_4bit=q_cfg.get("load_in_4bit", False),
              bnb_4bit_quant_type=q_cfg.get("bnb_4bit_quant_type", "nf4"),
@@ -912,45 +942,59 @@ def load_models_and_tokenizer(cfg: DictConfig, device: torch.device) -> Tuple[
     # Ensure pad token ID is set in model config
     if actor_model.config.pad_token_id is None:
         actor_model.config.pad_token_id = tokenizer.pad_token_id
-    print("Actor model loaded.")
-
+    logging.info("Actor model loaded.")
+    if cfg.training.get("gradient_checkpointing", False):
+        try:
+            # Enable on the base model wrapped by ActorModelWithValueHead
+            actor_model.base_model.gradient_checkpointing_enable()
+            print("Gradient checkpointing enabled for actor model.")
+        except AttributeError:
+             print("Warning: Could not enable gradient checkpointing. Method not found on base_model.")
+ 
     # --- Load Reference Model ---
     ref_model_kwargs = model_kwargs.copy()
-    ref_model_kwargs.pop("quantization_config", None) # No quantization for ref model
-    ref_model = AutoModelForCausalLM.from_pretrained(cfg.model.name, **ref_model_kwargs)
-    ref_model.to(device) # Move ref model to device
+    ref_model_kwargs.pop("quantization_config",
+                         None)  # No quantization for ref model
+    ref_model = AutoModelForCausalLM.from_pretrained(cfg.model.name,
+                                                     **ref_model_kwargs)
+    ref_model.to(device)
     if ref_model.config.pad_token_id is None:
         ref_model.config.pad_token_id = tokenizer.pad_token_id
     # Freeze reference model
     for param in ref_model.parameters(): param.requires_grad = False
     ref_model.eval()
-    print("Reference model loaded and frozen.")
+    logging.info("Reference model loaded and frozen.")
 
     return actor_model, ref_model, tokenizer
 
 
 def load_and_preprocess_dataset(cfg: DictConfig, tokenizer: PreTrainedTokenizerBase) -> Dataset:
     """Loads the dataset and preprocesses it."""
-    print(f"Loading dataset: {cfg.dataset.name}")
+    logging.info(f"Loading dataset: {cfg.dataset.name}")
     try:
         dataset = load_dataset(cfg.dataset.name, cfg.dataset.get("config"), split=cfg.dataset.split)
     except Exception as e:
-         print(f"Error loading dataset '{cfg.dataset.name}': {e}")
-         raise # Re-raise critical error
+        logging.info(f"Error loading dataset '{cfg.dataset.name}': {e}")
+        raise  # Re-raise critical error
 
     # --- Subsetting ---
     num_samples = cfg.training.get("num_samples")
-    if num_samples is not None and num_samples > 0 and num_samples <= len(dataset):
-        print(f"Subsetting dataset to {num_samples} samples.")
+    if num_samples is not None and num_samples > 0 and num_samples <= len(
+            dataset):
+        logging.info(f"Subsetting dataset to {num_samples} samples.")
         dataset = dataset.select(range(num_samples))
 
     # --- Preprocessing Function ---
     def preprocess_function(example):
         try:
-            example["prompt"] = cfg.dataset.prompt_format.format(question=example["question"])
-            example["ground_truth_answer"] = example["answer"].split("####")[-1].strip()
+            example["prompt"] = cfg.dataset.prompt_format.format(
+                question=example["question"])
+            example["ground_truth_answer"] = example["answer"].split(
+                "####")[-1].strip()
         except KeyError as e:
-            print(f"Error processing example: Missing key {e}. Skipping prompt/answer.")
+            print(
+                f"Error processing example: Missing key {e}. Skipping prompt/answer."
+            )
             example["prompt"] = ""
             example["ground_truth_answer"] = ""
         # Tokenize prompt only (no padding here)
@@ -968,12 +1012,12 @@ def load_and_preprocess_dataset(cfg: DictConfig, tokenizer: PreTrainedTokenizerB
             preprocess_function,
             remove_columns=dataset.column_names # Keep only processed columns
         )
-        processed_dataset.set_format(type="torch") # Set format for DataLoader
-        print(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
+        processed_dataset.set_format(type="torch")  # Set format for DataLoader
+        logging.info(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
         return processed_dataset
     except Exception as e:
-         print(f"Error during dataset mapping: {e}")
-         raise # Re-raise critical error
+        logging.info(f"Error during dataset mapping: {e}")
+        raise  # Re-raise critical error
 
 
 def setup_optimizer(cfg: DictConfig, model: nn.Module) -> torch.optim.Optimizer:
@@ -981,68 +1025,103 @@ def setup_optimizer(cfg: DictConfig, model: nn.Module) -> torch.optim.Optimizer:
     use_8bit = cfg.ppo.get("use_8bit_adam", False)
     lr = cfg.ppo.learning_rate
 
-    if use_8bit and bnb_available and isinstance(next(model.parameters()).device, torch.device) and next(model.parameters()).device.type == "cuda":
+    if use_8bit and bnb_available and isinstance(
+            next(model.parameters()).device, torch.device) and next(
+                model.parameters()).device.type == "cuda":
+        # Check for quantization conflict (optional, depends on specific use case)
         is_quantized = hasattr(model, 'quantization_config') and \
                        (model.quantization_config.load_in_8bit or model.quantization_config.load_in_4bit)
         if is_quantized:
-             print("Warning: Using 8-bit AdamW with a quantized model. Consider standard AdamW.")
-             optimizer = AdamW(model.parameters(), lr=lr)
+            print(
+                "Warning: Using 8-bit AdamW with a quantized model. Consider standard AdamW."
+            )
+            optimizer = AdamW(model.parameters(), lr=lr)
         else:
-             print("Using 8-bit AdamW Optimizer (bitsandbytes)")
-             optimizer = bnb_optim.AdamW8bit(model.parameters(), lr=lr)
+            logging.info("Using 8-bit AdamW Optimizer (bitsandbytes)")
+            optimizer = bnb_optim.AdamW8bit(model.parameters(), lr=lr)
     else:
-        if use_8bit: print("Info: 8-bit Adam not used (requirements not met). Using standard AdamW.")
-        else: print("Using standard AdamW Optimizer")
+        if use_8bit:
+            print(
+                "Info: 8-bit Adam not used (requirements not met). Using standard AdamW."
+            )
+        else:
+            logging.info("Using standard AdamW Optimizer")
         optimizer = AdamW(model.parameters(), lr=lr)
-    return optimizer
+    lr_scheduler = get_scheduler(
+        cfg.ppo.scheduler, optimizer, cfg.ppo.warmup_steps,
+        num_training_steps=(
+            cfg.training.total_ppo_steps *
+            ((cfg.ppo.rollout_samples // cfg.ppo.mini_batch_size) //
+             cfg.ppo.gradient_accumulation_steps) * cfg.ppo.epochs),
+        scheduler_specific_kwargs={'min_lr' : cfg.ppo.min_lr})
+    return optimizer, lr_scheduler
 
 
-def create_generation_config(cfg: DictConfig, tokenizer: PreTrainedTokenizerBase) -> GenerationConfig:
-     """Creates the GenerationConfig object."""
-     return GenerationConfig(
-        max_new_tokens=cfg.generation.max_new_tokens,
-        min_new_tokens=cfg.generation.min_new_tokens,
-        temperature=cfg.generation.temperature,
-        top_k=cfg.generation.top_k,
-        top_p=cfg.generation.top_p,
-        do_sample=cfg.generation.do_sample,
-        pad_token_id=tokenizer.pad_token_id
-    )
+def create_generation_config(
+        cfg: DictConfig,
+        tokenizer: PreTrainedTokenizerBase) -> GenerationConfig:
+    """Creates the GenerationConfig object."""
+    return GenerationConfig(max_new_tokens=cfg.generation.max_new_tokens,
+                            min_new_tokens=cfg.generation.min_new_tokens,
+                            temperature=cfg.generation.temperature,
+                            top_k=cfg.generation.top_k,
+                            top_p=cfg.generation.top_p,
+                            do_sample=cfg.generation.do_sample,
+                            pad_token_id=tokenizer.pad_token_id)
+
 
 def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase, save_path: str):
     """Saves the model and tokenizer."""
-    print(f"Saving model checkpoint to {save_path}...")
+    logging.info(f"Saving model checkpoint to {save_path}...")
     os.makedirs(save_path, exist_ok=True)
     try:
+        # Handle potential model wrappers (like ActorModelWithValueHead)
         unwrapped_model = getattr(model, "base_model", model)
+        # Handle PEFT model saving if applicable in the future
+        # if hasattr(unwrapped_model, 'save_pretrained'):
         unwrapped_model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
-        print(f"Model and tokenizer saved.")
+        logging.info(f"Model and tokenizer saved.")
     except Exception as e:
-        print(f"Error saving model: {e}")
+        logging.info(f"Error saving model: {e}")
 
 
 # ==============================================================================
-# == 7. Main Training Orchestration - PROVIDED
+# == 7. Main Training Orchestration
 # ==============================================================================
 
 def train(cfg: DictConfig):
     """Main PPO training loop."""
     # --- 1. Initial Setup ---
     device, output_dir = setup_training(cfg)
-    try: OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
-    except Exception as e: print(f"Error saving final config: {e}")
+
+    # Save final config after setup
+    OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
+
+    if cfg.wandb.report_to_wandb:
+        wandb.init(
+            project=cfg.wandb.project,
+            config=OmegaConf.to_container(cfg, resolve=True), # Log resolved config
+            name=cfg.wandb.get("name", None) # Use configured name or default
+        )
 
     # --- 2. Load Models and Tokenizer ---
-    try: actor_model, ref_model, tokenizer = load_models_and_tokenizer(cfg, device)
-    except Exception as e: print(f"Failed to load models/tokenizer: {e}"); return
+    try:
+        actor_model, ref_model, tokenizer = load_models_and_tokenizer(
+            cfg, device)
+    except Exception as e:
+        logging.info(f"Failed to load models/tokenizer: {e}")
+        return  # Cannot proceed
 
     # --- 3. Load and Preprocess Dataset ---
-    try: processed_dataset = load_and_preprocess_dataset(cfg, tokenizer)
-    except Exception as e: print(f"Failed to load/preprocess dataset: {e}"); return
+    try:
+        processed_dataset = load_and_preprocess_dataset(cfg, tokenizer)
+    except Exception as e:
+        logging.info(f"Failed to load/preprocess dataset: {e}")
+        return  # Cannot proceed
 
     # --- 4. Setup Optimizer ---
-    optimizer = setup_optimizer(cfg, actor_model)
+    optimizer, lr_scheduler = setup_optimizer(cfg, actor_model)
 
     # --- 5. Generation Config ---
     gen_config = create_generation_config(cfg, tokenizer)
@@ -1051,129 +1130,137 @@ def train(cfg: DictConfig):
     def collate_fn(batch):
         input_ids = [item['input_ids'] for item in batch]
         try:
+            # Use tokenizer.pad (respects tokenizer.padding_side)
             padded_inputs = tokenizer.pad({"input_ids": input_ids},
-                                          padding='longest', return_tensors="pt", return_attention_mask=True)
-        except Exception as e: print(f"Error during tokenizer.pad: {e}"); return None
+                                          padding='longest',
+                                          return_tensors="pt",
+                                          return_attention_mask=True)
+        except Exception as e:
+            logging.info(f"Error during tokenizer.pad in collate_fn: {e}")
+            return None  # Signal error to dataloader loop
         ground_truths = [item['ground_truth_answer'] for item in batch]
-        return {"prompt_input_ids": padded_inputs["input_ids"],
-                "prompt_attention_mask": padded_inputs["attention_mask"],
-                "ground_truth_answers": ground_truths}
+        return {
+            "prompt_input_ids": padded_inputs["input_ids"],
+            "prompt_attention_mask": padded_inputs["attention_mask"],
+            "ground_truth_answers": ground_truths
+        }
 
     # --- 7. Main PPO Loop ---
-    print("\n--- Starting PPO Training ---")
+    logging.info("\n--- Starting PPO Training ---")
     for ppo_step in range(cfg.training.total_ppo_steps):
-        print(f"\n===== PPO Step {ppo_step + 1}/{cfg.training.total_ppo_steps} =====")
+        print(
+            f"\n===== PPO Step {ppo_step + 1}/{cfg.training.total_ppo_steps} ====="
+        )
 
         # --- Phase 1: Rollout ---
-        print("Phase 1: Generating Rollouts...")
-        prompt_dataloader = DataLoader(
-            processed_dataset, batch_size=cfg.ppo.batch_size,
-            shuffle=True, collate_fn=collate_fn
-        )
+        logging.info("Phase 1: Generating Rollouts...")
+        prompt_dataloader = DataLoader(processed_dataset.shuffle(
+            seed=cfg.training.seed).select(range(cfg.ppo.rollout_samples)),
+                                       batch_size=cfg.ppo.batch_size,
+                                       shuffle=False,
+                                       collate_fn=collate_fn)
         try:
             rollout_buffer = perform_rollouts(
                 actor_model, ref_model, tokenizer, prompt_dataloader, gen_config, device
             )
         except Exception as e:
-            print(f"Error during rollout phase: {e}"); import traceback; traceback.print_exc(); continue
+            logging.info(f"Error during rollout phase: {e}")
+            import traceback
+            traceback.print_exc()
+            continue  # Skip to next PPO step
 
         # Validate rollout buffer
         if not rollout_buffer or "rewards" not in rollout_buffer or \
            not isinstance(rollout_buffer["rewards"], torch.Tensor) or \
            rollout_buffer["rewards"].numel() == 0:
-            print("Warning: Invalid rollout buffer generated. Skipping update."); continue
+            print(
+                "Warning: Invalid rollout buffer generated. Skipping update.")
+            continue
 
         avg_reward = rollout_buffer["rewards"].mean().item()
         num_rollouts = rollout_buffer["rewards"].shape[0]
-        print(f"Rollout complete ({num_rollouts} samples). Average reward: {avg_reward:.4f}")
+        print(
+            f"Rollout complete ({num_rollouts} samples). Average reward: {avg_reward:.4f}"
+        )
 
         # --- Phase 2: Update ---
-        print("Phase 2: Performing PPO Updates...")
-        try:
-            # --- Calls EXERCISE 5 logic indirectly via run_ppo_update_epoch ---
-            metrics = perform_ppo_updates(
-                actor_model, optimizer, rollout_buffer, cfg, device
-            )
-        except Exception as e:
-             print(f"Error during update phase: {e}"); import traceback; traceback.print_exc(); metrics = {}
-
+        logging.info("Phase 2: Performing PPO Updates...")
+        metrics = perform_ppo_updates(actor_model, optimizer, lr_scheduler,
+                                          rollout_buffer, cfg, device)
+        log_data = {}
+        log_data.update(metrics)
         # Log metrics
-        if metrics:
-            log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-            print(f"Update Metrics (Avg over Epoch): {log_str}")
-            print(f"  Rollout Reward (for this step): {avg_reward:.4f}")
-        else: print("PPO update skipped or failed.")
+        log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+        logging.info(f"Update Metrics (Avg over Epoch): {log_str}")
+        logging.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
+        log_data["rollout/reward_mean"] = avg_reward # Add rollout reward
+        if cfg.wandb.report_to_wandb:
+            wandb.log(log_data, step=ppo_step)
 
         # --- Phase 3: Save Checkpoint ---
         if (ppo_step + 1) % cfg.training.save_interval == 0:
             save_model(actor_model, tokenizer, os.path.join(output_dir, f"step_{ppo_step + 1}"))
 
+
+    if cfg.wandb.report_to_wandb:
+        wandb.finish()
     # --- 8. Final Save ---
-    print("\n--- PPO Training Finished ---")
+    logging.info("\n--- PPO Training Finished ---")
     save_model(actor_model, tokenizer, os.path.join(output_dir, "final"))
 
 
 # ==============================================================================
-# == 8. Command-Line Interface Logic - PROVIDED
+# == 8. Command-Line Interface Logic
 # ==============================================================================
 
-def load_config_with_cli_overrides(
-    default_config_path: str = "configs",
-    default_config_name: str = "config.yaml"
-) -> DictConfig:
+
+def load_config_with_cli_overrides() -> DictConfig:
     """Loads OmegaConf config, handling defaults and CLI overrides."""
-    parser = argparse.ArgumentParser(description="PPO RL Trainer (Refactored Exercise)")
-    parser.add_argument("--config-path", type=str, default=default_config_path)
-    parser.add_argument("--config-name", type=str, default=default_config_name)
-    parser.add_argument("overrides", nargs="*", help="Key=value config overrides")
+    parser = argparse.ArgumentParser(description="PPO RL Trainer")
+    parser.add_argument("--config", type=str)
+    parser.add_argument("overrides",
+                        nargs="*",
+                        help="Key=value config overrides")
     args = parser.parse_args()
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir) # Assumes script is in src/
-    config_dir_abs = os.path.join(project_root, args.config_path)
+    config_path = args.config 
 
-    conf_path = os.path.join(config_dir_abs, args.config_name)
-    if not os.path.exists(conf_path): # Fallback to relative path
-        conf_path = os.path.join(args.config_path, args.config_name)
-
-    if not os.path.exists(conf_path):
-        print(f"Error: Config file '{args.config_name}' not found in '{config_dir_abs}' or '{args.config_path}'.")
+    if not os.path.exists(config_path):
+        print(
+            f"Error: Config file '{args.config_name}' not found in '{config_dir_abs}' or '{args.config_path}'."
+        )
         sys.exit(1)
 
-    print(f"Loading config from: {conf_path}")
-    cfg = OmegaConf.load(conf_path)
+    logging.info(f"Loading config from: {config_path}")
+    cfg = OmegaConf.load(config_path)
 
     # Handle 'defaults' for base config merging (simplified)
-    if 'defaults' in cfg and cfg.defaults:
-        base_conf_name = cfg.defaults[0] + ".yaml" # Assumes first default is base
-        base_conf_path = os.path.join(config_dir_abs, base_conf_name)
-        if not os.path.exists(base_conf_path): base_conf_path = os.path.join(args.config_path, base_conf_name) # Fallback
+    if 'defaults' in cfg:
+        base_conf_path = cfg.defaults[0]
+        logging.info(f"Loading base config from: {base_conf_path}")
+        base_cfg = OmegaConf.load(base_conf_path)
+        cfg = OmegaConf.merge(base_cfg, cfg)  # Merge base first
 
-        if os.path.exists(base_conf_path):
-            print(f"Loading base config from: {base_conf_path}")
-            base_cfg = OmegaConf.load(base_conf_path)
-            cfg = OmegaConf.merge(base_cfg, cfg) # Merge base first
-        else: print(f"Warning: Base config '{base_conf_name}' not found.")
-        OmegaConf.set_struct(cfg, False); cfg.pop('defaults', None); OmegaConf.set_struct(cfg, True)
-
-    # Apply command-line overrides
+    # Apply CLI overrides
     if args.overrides:
-        print(f"Applying overrides: {args.overrides}")
+        logging.info(f"Applying overrides: {args.overrides}")
         cli_conf = OmegaConf.from_cli(args.overrides)
         cfg = OmegaConf.merge(cfg, cli_conf)
 
     # Resolve interpolations
-    try: OmegaConf.resolve(cfg)
-    except Exception as e: print(f"Warning: Config resolution error: {e}")
+    try:
+        OmegaConf.resolve(cfg)
+    except Exception as e:
+        logging.warn(f"Warning: Config resolution error: {e}")
 
-    print("--------- Final Configuration ---------")
-    print(OmegaConf.to_yaml(cfg, resolve=True)) # Print resolved config
-    print("---------------------------------------")
+    logging.info("--------- Final Configuration ---------")
+    logging.info(OmegaConf.to_yaml(cfg, resolve=True))  # Print resolved config
+    logging.info("---------------------------------------")
     return cfg
 
 
 # ==============================================================================
-# == 9. Entry Point - PROVIDED
+# == 9. Entry Point
 # ==============================================================================
 
 if __name__ == "__main__":
