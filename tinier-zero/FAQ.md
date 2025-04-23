@@ -146,11 +146,11 @@ This measures the difference between the reward we got ($`r_t`$) plus the discou
 * **Another Idea (Monte Carlo):** We could calculate the actual full discounted return $`G_t = r_t + \gamma r_{t+1} + \gamma^2 r_{t+2} + \dots`$ from step $t$ onwards and compare it to the baseline $`V(s_t)$: $A_t = G_t - V(s_t)`$. This is *unbiased* but can have very *high variance*, making learning unstable.
 
 * **GAE (The Compromise):** Generalized Advantage Estimation combines these ideas using a parameter $\lambda$ (`lam` in the code) to balance bias and variance. The GAE formula is essentially a geometrically decaying sum of TD errors:
-	
-	$$A_t^{GAE} = \delta_t + (\gamma \lambda) \delta_{t+1} + (\gamma \lambda)^2 \delta_{t+2} + \dots = \sum_{l=0}^{\infty} (\gamma \lambda)^l \delta_{t+l}$$
-
+```math	
+	A_t^{GAE} = \delta_t + (\gamma \lambda) \delta_{t+1} + (\gamma \lambda)^2 \delta_{t+2} + \dots = \sum_{l=0}^{\infty} (\gamma \lambda)^l \delta_{t+l}$$
+```
 	* If $\lambda = 0$, $`A_t^{GAE} = \delta_t`$ (TD Error).
-	* If $\lambda = 1$, $`A_t^{GAE}$ approximates the Monte Carlo advantage G_t - V(s_t)`$.
+	* If $\lambda = 1$, $`A_t^{GAE}`$ approximates the Monte Carlo advantage $`G_t - V(s_t)`$.
 	* Values between 0 and 1 interpolate, often providing a good balance ($\lambda=0.95$ is common).
 
 The "peculiar" GAE formula arises naturally as an exponentially weighted average of TD errors, providing a mechanism (controlled by $\lambda$) to smoothly interpolate between the low-variance, high-bias TD advantage ($\lambda=0$) and the high-variance, low-bias Monte Carlo advantage ($\lambda=1$).
