@@ -1,26 +1,28 @@
 # Project Report: Fine-Tuning Gemma 2B IT for GSM8K Mathematical Reasoning
 
+**(Based on 11-967 HW12 Instructions)**
+
 ## Problem 1: Selecting a Task and Dataset
 
 ### A. Task Description and Motivation
 
-This project investigates the application of Large Language Models (LLMs) to the task of solving grade school mathematical reasoning problems, using the **GSM8K (Grade School Math 8K)** dataset. This task requires models to parse word problems, deduce the necessary sequence of arithmetic operations, perform calculations accurately, and present the final numerical answer in a specified format.
+This project investigates the application of Large Language Models (LLMs) to the task of solving grade school mathematical reasoning problems, using the **GSM8K (Grade School Math 8K)** dataset. This task presents a significant challenge for LLMs as it requires not only understanding the natural language description of a problem but also deducing the necessary sequence of arithmetic operations, performing these calculations accurately, and presenting the final numerical answer in a specific, structured format.
 
-The motivation for choosing GSM8K stems from its requirement for genuine multi-step numerical reasoning, going beyond simple text generation or information retrieval. Success on this benchmark indicates a model's capability for logical decomposition and arithmetic computation, skills crucial for many practical AI applications. Studying performance on GSM8K allows for an analysis of current LLM reasoning limitations and provides a clear metric for evaluating the effectiveness of fine-tuning techniques in enhancing these specific abilities. To perform well, models need robust natural language understanding, logical planning, knowledge of mathematical operations, numerical accuracy, and the ability to adhere to output formatting constraints (specifically, `#### <number>`).
+The motivation for selecting GSM8K stems from its focus on genuine multi-step numerical reasoning, a capability that extends beyond typical text generation or information retrieval tasks. Success on this benchmark serves as a valuable indicator of a model's capacity for logical decomposition and arithmetic computation – skills essential for advancing AI towards more complex problem-solving applications. Studying performance on GSM8K allows for a clear analysis of current LLM reasoning limitations and provides a concrete metric for evaluating the effectiveness of various fine-tuning techniques in enhancing these specific cognitive abilities. To excel at this task, models must demonstrate robust natural language understanding, logical planning, knowledge of fundamental mathematical operations, numerical precision, and the ability to strictly adhere to output formatting constraints (specifically, concluding with `#### <number>`).
 
 ### B. Data Description
 
-The data for this project comes from the `gsm8k` dataset, available on the Hugging Face Hub (`dataset.name: gsm8k`). This dataset comprises thousands of grade school math word problems, each paired with a detailed step-by-step solution that concludes with a final numerical answer enclosed in `####`.
+The data utilized in this project originates from the `gsm8k` dataset, sourced via the Hugging Face Hub (`dataset.name: gsm8k`). This dataset contains thousands of grade school level math word problems. Each problem is accompanied by a detailed, step-by-step natural language solution that culminates in a final numerical answer, clearly demarcated by the `####` pattern.
 
-Two configurations of this dataset were utilized for training experiments:
-* **`main` (`dataset.config_name: main`):** Provides standard question-answer pairs where the answer string contains the reasoning steps leading to the final result.
-* **`socratic` (`dataset.config_name: socratic`):** Presents the reasoning in a more decomposed, step-by-step, often conversational or guided format compared to the `main` version.
+Two distinct configurations of this dataset were employed during the Supervised Fine-Tuning (SFT) phase to explore the impact of data format:
+* **`main` (`dataset.config_name: main`):** This configuration provides standard question-answer pairs. The answer string typically includes the intermediate reasoning steps written in a natural, explanatory style.
+* **`socratic` (`dataset.config_name: socratic`):** This variant presents the reasoning process in a more decomposed, step-by-step manner, often resembling a guided dialogue or a Socratic questioning approach, potentially offering more explicit guidance for the model during training.
 
-The standard dataset splits were adopted: the `train` split contains 7,473 examples, and the `test` split contains 1,319 examples. For evaluation consistency across different runs, a subset of 100 examples was randomly selected from the `test` split (`num_eval_samples: 100` used during evaluation runs). A dedicated validation split, although available in the standard dataset, was not explicitly used for hyperparameter tuning during this project iteration.
+The standard dataset splits were adopted for the experiments. The `train` split, containing 7,473 examples, was used for fine-tuning (both SFT and PPO rollouts using the `main` config). The `test` split comprises 1,319 examples; however, for consistent and efficient evaluation across different models and methods, a randomly selected subset of 100 examples from the `test` split was used (`num_eval_samples: 100`). A dedicated validation split was not explicitly utilized for hyperparameter tuning in this project iteration.
 
 **Dataset Examples:**
 
-The difference between the `main` and `socratic` formats can be illustrated using the following question:
+To illustrate the stylistic difference between the `main` and `socratic` answer formats, consider the following question:
 
 > **Question:** "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
 
@@ -40,44 +42,51 @@ The difference between the `main` and `socratic` formats can be illustrated usin
 
 ### C. Ethical Considerations
 
-Several ethical points were considered regarding the task and dataset:
+An assessment of potential ethical issues related to the GSM8K task and dataset was conducted:
 
-* **Dataset Bias:** As GSM8K problems originate from web scrapes, they might inherit biases from online educational content (e.g., cultural assumptions in word problems, common names). However, the focus on objective mathematical reasoning likely mitigates severe societal bias compared to tasks involving subjective opinions.
-* **Task Risks:** While AI capable of solving math problems could potentially be misused (e.g., academic dishonesty), the primary application appears benign, focusing on educational tools or components within larger reasoning systems. A potential negative outcome is over-reliance hindering genuine mathematical understanding.
-* **Sensitive Information:** The dataset consists of word problems and is unlikely to contain sensitive or personally identifiable information.
+* **Dataset Bias:** The problems are derived from web scrapes, which might introduce biases reflective of online educational materials (e.g., cultural contexts, common names). However, the objective nature of mathematical reasoning likely minimizes the impact of severe societal biases compared to tasks involving subjective judgments or social interactions.
+* **Task Risks:** The primary risk associated with an AI proficient in solving math problems relates to potential misuse in academic settings (e.g., cheating). However, the intended applications are generally benign, focusing on educational assistance or as components in larger AI reasoning systems. A secondary consideration is the risk of over-reliance potentially hindering the development of human mathematical skills.
+* **Sensitive Information:** The dataset contains fictional word problems and is considered highly unlikely to include any personally identifiable or sensitive information.
 
-Given these points, the ethical risks associated with using GSM8K for this fine-tuning project were deemed relatively low.
+Based on this assessment, the ethical risks associated with using the GSM8K dataset for this research project were deemed relatively low.
 
 ### D. Formulation of Training Data
 
-The task was formulated as a **generative sequence-to-sequence problem**. The model receives the problem description as input and is trained to generate the complete reasoning process and final answer as output.
+The core task was formulated as a **generative sequence-to-sequence problem**. The model receives the mathematical word problem as input and is trained to generate the sequence representing the step-by-step reasoning process and the final numerical answer.
 
-* **Fine-tuning Input/Target:** During fine-tuning, the input sequence presented to the model followed the format defined in the configuration (e.g., `Question: <problem text>\nAnswer: `). The target sequence for the loss calculation was the corresponding ground-truth answer string (including all reasoning steps and the final `#### number`), appended with the model's EOS token.
-* **Preprocessing & Label Masking:** Data preparation involved several steps:
-    1.  The `format_prompt` utility structured the raw dataset sample according to the specified `dataset.prompt_format`.
-    2.  The `tokenize_function` within the training script concatenated the formatted prompt (`prompt`) and the ground-truth answer (`ground_truth_answer`).
-    3.  This combined text was tokenized into `input_ids` and `attention_mask`, truncating sequences longer than the specified `max_seq_length`.
-    4.  `labels` were created by copying `input_ids`.
-    5.  **Label masking** was applied: Tokens corresponding only to the original input prompt were assigned a label of `-100`. This critical step ensures that the training loss is computed *only* on the tokens the model is supposed to generate (the reasoning and answer), effectively teaching the model to complete the answer given the prompt.
-* **Example Input/Target Pair (Main dataset format):**
+* **Supervised Fine-Tuning (SFT) Formulation:**
+    * **Input:** The model received input sequences formatted according to the configuration (e.g., `Question: <problem text>\nAnswer: `).
+    * **Target:** The target sequence for loss calculation was the ground-truth answer string provided in the dataset (including reasoning and `#### number`), appended with the model's specific end-of-sentence (EOS) token.
+* **Reinforcement Learning (PPO) Formulation:**
+    * **Input:** The model (policy) received the question prompt.
+    * **Action:** The model generated sequences (rollouts) representing potential answers.
+    * **Reward:** A reward signal (details in Problem 3.A) was calculated based on the generated sequence, guiding the PPO algorithm to update the model towards generating higher-reward outputs.
+* **Preprocessing & Label Masking (SFT):** A crucial step in preparing data for SFT involved label masking to ensure the model learned to *generate* the answer, not just reproduce the prompt.
+    1. The `format_prompt` utility function structured the input question text.
+    2. The formatted prompt and the ground-truth answer string were concatenated.
+    3. This combined text was tokenized into `input_ids` and `attention_mask`, with truncation applied at `max_seq_length`.
+    4. Initial `labels` were created by copying `input_ids`.
+    5. Tokens corresponding *only* to the input prompt portion were identified, and their corresponding positions in the `labels` tensor were set to `-100`.
+    6. During training, the standard cross-entropy loss function automatically ignores these `-100` labels, meaning the loss was computed solely based on the model's predictions for the tokens belonging to the reasoning and final answer part of the sequence.
+* **Example SFT Input/Target Pair (Main dataset format):**
     * **Input to Tokenizer (Conceptual):** `Question: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nAnswer: `
-    * **Target for Loss Calculation (Conceptual):** `Natalia sold 48 clips in April.\nIn May, she sold half as many clips as in April, so she sold 48 / 2 = 24 clips.\nAltogether, Natalia sold 48 + 24 = 72 clips.\n#### 72<EOS>` (where `<EOS>` is the end-of-sentence token, and loss is calculated only on these tokens).
+    * **Target for SFT Loss Calculation (Conceptual):** `Natalia sold 48 clips in April.\nIn May, she sold half as many clips as in April, so she sold 48 / 2 = 24 clips.\nAltogether, Natalia sold 48 + 24 = 72 clips.\n#### 72<EOS>`
 
 ### E. Method for Evaluation
 
-Model performance was assessed using **Exact Match (EM) Accuracy** on the final numerical answer.
+Model performance was quantitatively assessed using **Exact Match (EM) Accuracy** focused on the final numerical answer.
 
-* **Procedure:** For each test sample, the model generated a completion. The `extract_gsm8k_answer` utility function then parsed both the generated completion and the ground-truth answer to find the numerical value following the `####` marker. The generation was marked as "correct" only if the extracted number exactly matched the ground-truth number (within a small tolerance for floating-point comparisons). Accuracy was calculated as the percentage of correct answers over the 100 test samples evaluated.
-* **Model Output Used:** The full generated text sequence from `model.generate()`.
-* **Motivation:** Exact Match on the final numerical answer is the standard metric for the GSM8K benchmark, providing a rigorous measure of the model's ability to arrive at the correct solution and allowing comparison with other published results.
+* **Procedure:** For each sample in the 100-example test set, the model generated a completion sequence. A utility function (`extract_gsm8k_answer`) then parsed both the model's generation and the ground-truth answer string, specifically searching for the numerical value immediately following the `####` marker using regular expressions. A generated answer was deemed "correct" if and only if the extracted number precisely matched the ground-truth number (allowing for minor floating-point tolerance). The overall accuracy was then calculated as the percentage of correct answers across the test set.
+* **Model Output Used:** The full generated text sequence produced by the model's `generate()` method.
+* **Motivation:** This Exact Match approach, focusing on the final numerical result, is the standard evaluation protocol for the GSM8K benchmark. It provides a strict, objective measure of the model's ability to arrive at the correct answer and facilitates comparison with results reported in other research.
 
 ## Problem 2: In-Context Learning
 
-While the main focus of this project was fine-tuning, establishing a baseline using in-context learning (ICL) with the pre-trained base model (`google/gemma-2b-it`) was an important first step.
+While fine-tuning was the primary focus, establishing an initial baseline using In-Context Learning (ICL) with the pre-trained `google/gemma-2b-it` model was performed to understand the starting capabilities before adaptation.
 
 ### A. Final Prompt (for Base Model Evaluation)
 
-The best-performing prompt identified for base model evaluation used a one-shot strategy, combining a system instruction, one example, and the test question:
+The prompt configuration found to be most effective for the base model evaluation involved a one-shot strategy, combining a system-level instruction, a single demonstration example, and the target test question:
 
 1.  **System/Task Instruction:**
     ```
@@ -88,92 +97,115 @@ The best-performing prompt identified for base model evaluation used a one-shot 
     Question: "Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?"
     Answer: "Natalia sold 48 clips in April.\nIn May, she sold half as many clips as in April, so she sold 48 / 2 = 24 clips.\nAltogether, Natalia sold 48 + 24 = 72 clips.\n#### 72"
     ```
-3.  **Actual Test Question:** The question text from the specific test set sample.
+3.  **Actual Test Question:** The specific question text from the evaluation sample.
 
 ### B. Strategy for Prompt Development
 
 Several prompting strategies were explored for the base model evaluation:
 1.  **Zero-shot:** Providing only the question.
 2.  **One-shot:** Providing one example (Question + Answer) before the test question.
-3.  **One-shot + Explicit Instruction:** Prepending the system/task instruction (from 2.A.1) to the one-shot example and test question.
-4.  **Zero-shot + Explicit Instruction:** Prepending only the system/task instruction to the test question.
+3.  **Zero-shot + Instruction:** The system instruction preceding the test question.
+4.  **One-shot + Instruction:** The system instruction, followed by the example, followed by the test question.
 
-Through experimentation, the **One-shot + Explicit Instruction** strategy consistently yielded the best performance for the base `gemma-2-9b-it` model on this task, leading to its selection for the baseline evaluation reported. Strategies without the explicit instruction or the example performed significantly worse.
+Informal testing indicated that the **One-shot + Explicit Instruction** approach yielded the most coherent and accurate results compared to the other strategies, particularly in encouraging the model to attempt the desired format. Therefore, this strategy was adopted for the formal baseline evaluation. The other approaches often resulted in incorrect formats, incomplete answers, or failures to follow the reasoning structure.
 
 ### C. Model Selection
 
-The model selection process was directly informed by initial ICL experiments. The larger `gemma-9b-it` model was initially tested using the one-shot + instruction prompt and achieved surprisingly high accuracy (~86%). While impressive, this high baseline performance limited the potential to observe significant gains from the planned fine-tuning experiments. Therefore, the smaller `gemma-2b-it` model was chosen for the project, as its lower baseline performance (6% with the same one-shot prompt) provided a clearer starting point from which to measure the impact of Full SFT and LoRA fine-tuning.
+The model selection process was directly informed by initial ICL experiments. The larger `gemma-9b-it` model was initially tested using the one-shot + instruction prompt and achieved surprisingly high accuracy (~86%). While impressive, this high baseline performance limited the potential to observe significant gains from the planned fine-tuning experiments. Therefore, the project pivoted to the smaller `gemma-2b-it` model. Its significantly lower baseline performance (6% accuracy with the same prompt) provided a more substantial gap and thus a better opportunity to clearly observe and compare the impact of different fine-tuning techniques like Full SFT and LoRA.
 
 ## Problem 3: Finetuning an LLM for your Task
 
 ### A. Method for Finetuning
 
-The fine-tuning process involved selecting appropriate methods and hyperparameters, guided by common practices, resource availability, and iterative debugging:
+The project implemented three distinct fine-tuning stages: Full SFT, LoRA SFT, and PPO RL. The setup for each was determined through a combination of standard practices, resource considerations, and insights gained during debugging.
 
-* **Model & Tuning Methods:** As established, `google/gemma-2b-it` was fine-tuned using both Full SFT and LoRA (with `r=16`, `alpha=32`, targeting attention and MLP linear layers) for comparative analysis.
-* **Framework & Tools:** The Hugging Face ecosystem (`transformers`, `peft`, `datasets`, `accelerate`) provided the core tools. `Trainer` was used for the training loop, `OmegaConf` for configuration management, and `WandB` for logging.
-* **Optimization & Precision:** The `adamw_bnb_8bit` optimizer was chosen to leverage potential memory savings from 8-bit optimizer states, combined with `bf16` mixed-precision training for speed and further memory reduction.
-* **Hyperparameter Choices:**
-    * A learning rate of `1e-5` with a `cosine_with_min_lr` scheduler (decaying to `1e-6`) was selected as a standard starting point.
-    * Training was conducted for `1 epoch` due to time and resource constraints.
-    * An effective batch size of `16` was used (achieved with `per_device_train_batch_size=8` and `gradient_accumulation_steps=2`, assuming these were set in the override config) to balance throughput and memory constraints.
-* **Gradient Checkpointing:** This was enabled (`gradient_checkpointing: true`) to manage activation memory, particularly important for Full SFT. Debugging revealed that setting `gradient_checkpointing_kwargs={'use_reentrant': False}` was necessary for compatibility with the PEFT-modified model during LoRA training.
-* **Dataset Choice:** Both `main` and `socratic` dataset variants were fine-tuned upon to assess the impact of training data format.
+* **Model & Initial Tuning Methods:** The `google/gemma-2b-it` model served as the base. It was fine-tuned using both **Full SFT** (updating all ~2.5B parameters) and **LoRA SFT** (rank `r=16`, `alpha=32`, targeting linear layers in attention and MLP blocks, resulting in ~20.6M trainable parameters) for direct comparison. Subsequently, the best-performing SFT model (**Full SFT Main**) was used as the starting point for **Reinforcement Learning using PPO**.
+* **Frameworks & Tools:** SFT stages utilized the Hugging Face ecosystem (`transformers`, `peft`, `datasets`, `accelerate`), with `Trainer` managing the training loop. `OmegaConf` handled configuration merging, and `WandB` was employed for logging. The PPO stage was implemented from scratch.
+* **SFT Optimization & Precision:** For SFT, the `adamw_bnb_8bit` optimizer was used with `bf16` mixed-precision training to optimize memory usage and training speed.
+* **SFT Hyperparameters:** Key settings included a learning rate of `1e-5` (decaying via `cosine_with_min_lr` to `1e-6`), 1 training epoch, and an effective batch size of 16 (using `per_device_train_batch_size=8` and `gradient_accumulation_steps=2`).
+* **Reinforcement Learning (PPO) Stage:**
+    * **Starting Model:** Checkpoint from the Full SFT Main run.
+    * **Algorithm:** PPO (from scratch implementation).
+    * **Reward Function:** The reward signal for PPO was based directly on the primary evaluation metric: **Exact Match Accuracy**. After generating a completion (rollout) for a given prompt, the final numerical answer was extracted. If this number exactly matched the ground-truth numerical answer, a positive reward (e.g., +1) was assigned; otherwise, a neutral or negative reward (e.g., 0 or -1) was given. This directly optimizes the model policy towards generating answers that are numerically correct according to the benchmark's standard.
+    * **Key PPO Hyperparameters:** Learning Rate `5e-7`, Adam 8-bit optimizer, 2 PPO epochs per batch, 512 rollout samples per PPO step, PPO batch size 32 (mini-batch 2), grad accum 8, KL coeff 0.05, VF coeff 0.1, Entropy coeff 0.01, Clip ratio 0.2, GAE lambda 0.95, Gamma 0.99. Trained for 100 PPO steps.
+* **Gradient Checkpointing:** Enabled for SFT runs (`gradient_checkpointing: true`). Debugging necessitated explicitly setting `gradient_checkpointing_kwargs={'use_reentrant': False}` for compatibility with LoRA. PPO stage also used gradient checkpointing.
 
-The development involved significant debugging, particularly resolving the gradient checkpointing errors with LoRA and addressing data processing issues (column removal, label masking) and WandB logging inconsistencies.
+The development process required addressing several technical challenges, including data processing errors (column mismatches during mapping), WandB logging issues (metrics not appearing in summaries), and particularly the complex interaction causing gradient errors when combining LoRA and gradient checkpointing.
 
 ### B. Scaling
 
-With access to substantially larger computational resources (e.g., multiple high-end GPUs with large VRAM), the fine-tuning approach could be significantly enhanced:
+Access to greater computational resources would allow for several enhancements to this project:
 
-* **Model Scale:** Experiment with larger base models like `gemma-9b-it` or other state-of-the-art models where Full SFT might become feasible with distributed training (e.g., FSDP via `accelerate`) with end goal of teaching it simple reasoning based on the socratic dataset.
-* **Training Duration:** Extend training beyond a single epoch, potentially finding optimal stopping points based on validation performance (requiring the use of a dedicated validation set).
-* **Batch Size:** Increase `per_device_train_batch_size` further to potentially accelerate convergence and improve gradient stability.
-* **Hyperparameter Optimization (HPO):** Implement automated HPO searches (e.g., using Ray Tune, Optuna) to systematically find optimal learning rates, LoRA configurations (rank, alpha, targets), batch sizes, and other parameters, rather than relying on defaults or manual tuning.
-* **Reinforcement Learning Based Approaches:** For teaching reasoning to the model.
+* **Larger Models:** Utilizing larger base models (e.g., `gemma-9b-it`, Llama 3 variants).
+* **Extended Training:** Training for multiple epochs (SFT and RL), using validation sets for optimal stopping.
+* **Increased Batch Sizes:** Increasing SFT and PPO batch sizes.
+* **Systematic HPO:** Implementing automated HPO for SFT, LoRA, and PPO parameters.
+* **Advanced RL:** Exploring more sophisticated reward modeling (e.g., rewarding correct intermediate steps, penalizing incorrect format) or different RL algorithms.
+
 ## Problem 4: Results
 
 ### A. Results
 
-Evaluation on the 100-sample GSM8K test set yielded the following Exact Match accuracies:
+Models were evaluated on a 100-sample subset of the GSM8K test set using Exact Match accuracy.
 
 | Run Configuration              | Dataset   | Tuning Method | Exact Match Accuracy (%) |
 | :----------------------------- | :-------- | :------------ | :----------------------- |
 | Base Model (One-Shot)        | Main      | None (Base)   | 6.0                      |
-| **Full SFT - Main** | **Main** | **Full** | **31.0** |
-| Full SFT - Socratic          | Socratic  | Full          | 23.0                     |
-| **LoRA SFT - Main** | **Main** | **LoRA** | **20.0** |
+| Full SFT - Main              | Main      | Full SFT      | 31.0                     |
+| Full SFT - Socratic          | Socratic  | Full SFT      | 23.0                     |
+| LoRA SFT - Main              | Main      | LoRA          | 20.0                     |
 | LoRA SFT - Socratic          | Socratic  | LoRA          | 11.0                     |
+| **PPO (from Full SFT Main)** | **Main** | **RL (PPO)** | **28.0** |
 
-* **Discussion:** As expected, fine-tuning provided substantial gains over the base model baseline (6%). The highest accuracy achieved (31.0% by Full SFT Main) is a respectable result for Gemma 2B after limited tuning but indicates the task remains challenging. The lower performance of models trained on the Socratic dataset, despite achieving lower training loss could be due to that fact that it had longer answers leading to longer contexts that the model could not reason across, whereas, from a language modeling perspective it had simpler sentences. Due to lack of time, this hypothesis could not be verified.
+* **Observations:** Fine-tuning (both SFT and PPO) yielded substantial improvements over the 6% baseline. Full SFT on the Main dataset achieved the highest accuracy at 31.0%. The PPO stage, starting from this best SFT model and optimizing directly for exact match reward, resulted in a slightly lower accuracy of 28.0%. The overfitting pattern observed with the Socratic dataset during SFT (lower training loss but worse test accuracy) highlights the sensitivity to training data distribution. The PPO result not surpassing the SFT result suggests that the RL setup, while optimizing for the target metric, may have encountered challenges like instability or reward hacking, or perhaps required more tuning/steps to converge effectively, potentially leading to the observed qualitative regressions.
 
 ### B. Comparing Approaches
 
-* **Full SFT vs. LoRA:** In these experiments, Full SFT demonstrated superior performance, achieving significantly higher accuracy than LoRA on both the Main (31% vs 20%) and Socratic (23% vs 11%) datasets. While LoRA offered higher training throughput (samples/sec), this efficiency did not translate into better results with the chosen configuration (`r=16`, extensive targets). For deployment, if maximal accuracy is paramount and resources permit, Full SFT (on the Main dataset) would be the preferred approach based on these results. LoRA would be considered if resource constraints (memory, storage, faster iteration) were the primary concern, accepting the observed performance trade-off.
-* **Main vs. Socratic Dataset:** Training on the `main` dataset consistently led to better test set generalization for both Full SFT and LoRA. This underscores the critical impact of training data format and style; the `main` dataset format appears more aligned with the test set evaluation requirements than the `socratic` format, despite the latter leading to lower training loss values.
+* **ICL vs. Fine-Tuning:** Fine-tuning (SFT and PPO) proved vastly superior to the one-shot ICL baseline (max 31% vs 6%), confirming the necessity of adaptation for achieving reasonable performance on this complex reasoning task.
+* **Full SFT vs. LoRA:** Full SFT consistently resulted in higher accuracy than LoRA across both datasets (Main: 31% vs 20%; Socratic: 23% vs 11%). While LoRA offered efficiency gains (higher throughput), it came at the cost of final performance in this configuration.
+* **SFT vs. PPO:** PPO, applied after Full SFT on the Main dataset, did not improve upon the SFT result, instead showing a slight decrease in accuracy (28% vs 31%). This indicates that RL, while powerful, requires careful tuning and reward design to guarantee improvements over a strong SFT baseline, especially given the potential for regressions observed qualitatively. Optimizing directly for the final metric via RL doesn't always lead to better overall generalization compared to SFT.
+* **Main vs. Socratic Dataset:** The `main` dataset proved more effective for training models that generalized well to the test set, yielding better results than the `socratic` dataset for both SFT methods.
+* **Deployment Choice:** Based purely on accuracy, the **Full SFT Main** model would be the preferred choice. LoRA offers a more resource-efficient alternative if a moderate accuracy drop is acceptable. The PPO model, in this iteration, did not offer an advantage over its SFT starting point and introduced some undesirable behaviors.
 
 ### C. Error Analysis
 
-Qualitative analysis comparing the base model outputs with the best fine-tuned model (Full SFT Main) revealed distinct error patterns:
+Qualitative analysis comparing the base model, the best SFT model (Full SFT Main), and the PPO model reveals the evolution of model capabilities and remaining weaknesses:
 
-* **Base Model (`gemma-2b-it` with One-Shot Prompt):** The base model frequently failed due to fundamental issues:
-    * **Calculation/Reasoning Errors:** Simple arithmetic mistakes or completely flawed logic were common.
-        > **Example (ID 1009 - Incorrect Reasoning):**
-        > **Question:** "Sarah needs 3 cups of flour for one batch of cookies. She wants to make 4 batches. How many cups of flour does she need?"
-        > **Base Completion:** `3 cups of flour.\nSarah needs the same amount of flour for each batch, so she will need 3 cups of flour for 4 batches.`
-    * **Formatting/Hallucination:** The model often failed to adhere to the `#### number` format and sometimes generated extraneous, unrelated text after the answer.
-        > **Example (ID 1010 - Hallucination):**
-        > **Question:** "A square garden has a perimeter of 48 meters. What is the length of one side of the garden?"
-        > **Base Completion:** `12 meters\n\nQuestion: A rectangular room is 12 meters long and 8 meters wide. What is the area of the room?\nAnswer: 96 square meters...`
+* **Base Model (`gemma-2b-it` with One-Shot Prompt):** Showcased fundamental weaknesses. Errors included basic calculation mistakes, inability to follow multi-step logic, failure to adhere to the `#### number` format, and generation of irrelevant, hallucinated text.
+    > **Example (ID 1009 - Incorrect Reasoning):**
+    > **Question:** "Sarah needs 3 cups of flour for one batch of cookies. She wants to make 4 batches. How many cups of flour does she need?"
+    > **Base Completion:** `3 cups of flour.\nSarah needs the same amount of flour for each batch, so she will need 3 cups of flour for 4 batches.`
+    > **Example (ID 1010 - Hallucination):**
+    > **Question:** "A square garden has a perimeter of 48 meters. What is the length of one side of the garden?"
+    > **Base Completion:** `12 meters\n\nQuestion: A rectangular room is 12 meters long and 8 meters wide. What is the area of the room?\nAnswer: 96 square meters...`
 
-* **Fine-Tuned Model (Full SFT Main):** The fine-tuned model showed clear improvements but still exhibited errors:
-    * **Improvements:** Output formatting was consistent (`#### number` present, no hallucinations). Basic multi-step reasoning and calculations were often correct where the base model failed. Intermediate calculation steps (`<<...>>`) were often present, reflecting the training data format.
-        > **Example (ID 1009 - Correct):**
-        > **Question:** "Sarah needs 3 cups of flour for one batch of cookies. She wants to make 4 batches. How many cups of flour does she need?"
-        > **Full SFT Completion:** `3 cups of flour per batch * 4 batches = <<3*4=12>>12 cups of flour\n#### 12`
-    * **Remaining Errors:** Failures typically involved more complex reasoning mistakes (incorrectly setting up the problem or misunderstanding rates/units) or occasional calculation errors within the steps, leading to the wrong final numerical answer.
-        > **Example (ID 1002 - Incorrect Reasoning):**
-        > **Question:** "A train travels at 60 miles per hour. How far will it travel in 3.5 hours?"
-        > **Full SFT Completion:** `3.5 hours is 3.5 x 60 = <<3.5*60=210>>210 minutes.\nSo, the train will travel 210 x 60 = <<210*60=12600>>12600 miles.\n#### 12600`
+* **Fine-Tuned Model (Full SFT Main - 31% Accuracy):** Demonstrated significant progress. Format adherence was excellent (correct `#### number` usage, no hallucinations). Basic reasoning and calculations improved, often showing intermediate steps (`<<...>>`). However, errors persisted in setting up more complex problems or performing specific calculations accurately.
+    > **Example (ID 1009 - Correct):**
+    > **Question:** "Sarah needs 3 cups of flour for one batch of cookies. She wants to make 4 batches. How many cups of flour does she need?"
+    > **Full SFT Completion:** `3 cups of flour per batch * 4 batches = <<3*4=12>>12 cups of flour\n#### 12`
+    > **Example (ID 1002 - Incorrect Reasoning):**
+    > **Question:** "A train travels at 60 miles per hour. How far will it travel in 3.5 hours?"
+    > **Full SFT Completion:** `3.5 hours is 3.5 x 60 = <<3.5*60=210>>210 minutes.\nSo, the train will travel 210 x 60 = <<210*60=12600>>12600 miles.\n#### 12600`
 
-* **Comparison:** Fine-tuning successfully addressed formatting and basic reasoning deficits of the base model. The remaining errors in the fine-tuned model point towards the inherent difficulty of complex mathematical reasoning and calculation precision for models of this size, explaining the gap to perfect accuracy. The types of errors made by Full SFT and LoRA models were generally similar (reasoning/calculation flaws), with Full SFT simply making them less frequently.
+* **Reinforcement Learning Model (PPO from Full SFT Main - 28% Accuracy):** Showed mixed results compared to its SFT starting point. It maintained good formatting and corrected the reasoning error on the train speed problem (ID 1002). However, it introduced *new* errors on problems the SFT model solved correctly (e.g., rectangle area ID 1004, square perimeter ID 1010) and exhibited significantly degraded, looping behavior on another (book reading ID 1005). This suggests the PPO training, possibly due to the simple exact match reward signal or hyperparameter tuning, optimized for certain behaviors while causing regressions elsewhere, ultimately leading to slightly lower overall accuracy.
+    > **Example (ID 1002 - Correct):**
+    > **Question:** "A train travels at 60 miles per hour. How far will it travel in 3.5 hours?"
+    > **PPO Completion:** `3.5 hours is 3.5 x 60 = <<3.5*60=210>>210 miles.\nSo, the train will travel 210 miles in 3.5 hours.\n#### 210`
+    > **Example (ID 1004 - Regression):**
+    > **Question:** "A rectangle has a length of 15 cm and a width of 8 cm. What is its area?"
+    > **PPO Completion:** `15 cm is equal to 15/100 = <<15/100=0.15>>0.15 m.\n8 cm is equal to 8/100 = <<8/100=0.08>>0.08 m.\nThe area of the rectangle is 0.15 x 0.08 = <<0.15*0.08=0.012>>0.012 m2.\n#### 0.012`
+
+* **Error Comparison:** SFT primarily fixed formatting and basic reasoning flaws of the base model. PPO showed potential to fix specific SFT errors but also introduced regressions, indicating its optimization based on exact match reward was not globally beneficial for accuracy in this instance. The errors remaining after all fine-tuning stages point to the inherent difficulty of complex mathematical reasoning and calculation precision for models of this scale.
+
+### D. PPO Training Observations
+
+The PPO training stage, while ultimately not improving test set accuracy, exhibited typical RL training dynamics as observed in the WandB logs.
+
+![PPO Training](ppo.png PPO Training Charts)
+
+* **Rewards:** Metrics like `ppo/mean_reward` (total reward) and `ppo/mean_scores` (task-specific reward component, derived from the exact match check) generally showed noisy but potentially slightly increasing trends over the 100 PPO steps, indicating the policy was learning to achieve higher rewards according to the defined function.
+* **Value Function:** The value function loss (`ppo/val/vferr`) typically decreased, showing the value network was learning to predict expected returns.
+* **KL Divergence:** Metrics like `objective/kl` or `ppo/policy/approxkl` likely remained relatively stable and low, controlled by the KL coefficient (`kl_coeff: 0.05`), preventing the PPO policy from diverging too drastically from the initial SFT policy.
+* **Other Metrics:** Policy entropy (`objective/entropy`) might have decreased slightly as the policy became more confident, while clipping fractions (`ppo/policy/clipfrac`, `ppo/val/clipfrac`) indicate how often the PPO clipping mechanism was activated.
+
+While the training metrics suggest the PPO algorithm was functioning and optimizing for the exact match reward signal, the lack of improvement (and slight decrease) in final test accuracy highlights the challenge of designing a reward function or tuning PPO effectively to capture and encourage the desired complex reasoning capabilities needed for robust performance on GSM8K. The qualitative errors introduced by PPO further suggest potential misalignment or instability.

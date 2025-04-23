@@ -35,7 +35,7 @@
 * **Training Setup:**
     * Frameworks: Hugging Face `transformers`, `peft`, `accelerate`.
     * Key Hyperparameters: AdamW 8-bit optimizer, Cosine LR scheduler, BF16 precision, Effective Batch Size 16 (2 * 8), 1 Epoch. (Refer to config for details).
-* **Evaluation:** Exact Match Accuracy on GSM8K test split (100 samples).
+* **Evaluation:** Exact Match Accuracy on GSM8K test split (256 random samples, same seed across evaluations).
 
 ---
 
