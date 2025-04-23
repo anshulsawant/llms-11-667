@@ -527,6 +527,8 @@ def run_grpo_update_epoch(
                 aggregate_metrics.setdefault('params/grad_norm', []).append(grad_norm.item())
                 optimizer.step()
                 lr_scheduler.step() # Step scheduler with optimizer
+            else:
+                raise Exception('No gradients found during training.')
             optimizer.zero_grad(set_to_none=True)
 
     # --- End of Epoch ---
