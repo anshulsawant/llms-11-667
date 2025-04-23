@@ -543,14 +543,10 @@ def perform_grpo_updates(
     device: torch.device
 ) -> Dict[str, float]:
     """Performs multiple GRPO epochs on the collected rollout data."""
-    try:
-        buffer_on_device = {
-            k: v.to(device) if isinstance(v, torch.Tensor) else v
-            for k, v in rollout_buffer.items()
-        }
-    except AttributeError as e:
-        logger.error(f"Error moving buffer to device: {e}", exc_info=True)
-        return {}
+    buffer_on_device = {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v
+        for k, v in rollout_buffer.items()
+    }
 
     if "response_input_ids" not in buffer_on_device or \
        not isinstance(buffer_on_device["response_input_ids"], torch.Tensor) or \
@@ -606,8 +602,7 @@ def load_models_and_tokenizer_grpo(cfg: DictConfig, device: torch.device) -> Tup
     model_kwargs = {}
     model_dtype_str = cfg.model.get("torch_dtype", "auto")
     if model_dtype_str != "auto":
-        try: model_kwargs["torch_dtype"] = getattr(torch, model_dtype_str)
-        except AttributeError: logger.warning(f"Invalid torch_dtype '{model_dtype_str}'. Using auto.")
+        model_kwargs["torch_dtype"] = getattr(torch, model_dtype_str)
     if cfg.model.get("trust_remote_code", False): model_kwargs["trust_remote_code"] = True
     # Add quantization if needed (similar to PPO setup)
     # ...
@@ -620,11 +615,8 @@ def load_models_and_tokenizer_grpo(cfg: DictConfig, device: torch.device) -> Tup
     logger.info("Actor model loaded.")
     # Enable gradient checkpointing if configured
     if cfg.training.get("gradient_checkpointing", False):
-        try:
-            actor_model.gradient_checkpointing_enable()
-            logger.info("Gradient checkpointing enabled for actor model.")
-        except AttributeError:
-             logger.warning("Could not enable gradient checkpointing. Method not found.")
+        actor_model.gradient_checkpointing_enable()
+        logger.info("Gradient checkpointing enabled for actor model.")
 
     # --- Load Reference Model (Identical to PPO setup) ---
     ref_model_kwargs = model_kwargs.copy()
@@ -710,13 +702,10 @@ def save_model_grpo(model: nn.Module, tokenizer: PreTrainedTokenizerBase, save_p
     # Identical to PPO saving
     logger.info(f"Saving model checkpoint to {save_path}...")
     os.makedirs(save_path, exist_ok=True)
-    try:
-        # No base_model attribute if using AutoModelForCausalLM directly
-        model.save_pretrained(save_path)
-        tokenizer.save_pretrained(save_path)
-        logger.info(f"Model and tokenizer saved.")
-    except Exception as e:
-        logger.error(f"Error saving model: {e}")
+    # No base_model attribute if using AutoModelForCausalLM directly
+    model.save_pretrained(save_path)
+    tokenizer.save_pretrained(save_path)
+    logger.info(f"Model and tokenizer saved.")
 
 
 # ==============================================================================
@@ -727,31 +716,23 @@ def train_grpo(cfg: DictConfig):
     """Main GRPO training loop."""
     # --- 1. Initial Setup ---
     device, output_dir = setup_training_grpo(cfg)
-    try: OmegaConf.save(cfg, os.path.join(output_dir, "effective_config_grpo.yaml"))
-    except Exception as e: logger.error(f"Error saving final config: {e}")
+    OmegaConf.save(cfg, os.path.join(output_dir, "effective_config_grpo.yaml"))
 
     if cfg.wandb.get("report_to_wandb", False): # Check existence safely
-        try:
-            wandb.init(
-                project=cfg.wandb.project,
-                config=OmegaConf.to_container(cfg, resolve=True),
-                name=cfg.wandb.get("name", None)
-            )
-        except Exception as e:
-            logger.error(f"Failed to initialize WandB: {e}")
-            cfg.wandb.report_to_wandb = False # Disable logging if init fails
+        wandb.init(
+            project=cfg.wandb.project,
+            config=OmegaConf.to_container(cfg, resolve=True),
+            name=cfg.wandb.get("name", None)
+        )
 
     # --- 2. Load Models and Tokenizer ---
-    try: actor_model, ref_model, tokenizer = load_models_and_tokenizer_grpo(cfg, device)
-    except Exception as e: logger.error(f"Failed to load models/tokenizer: {e}", exc_info=True); return
+    actor_model, ref_model, tokenizer = load_models_and_tokenizer_grpo(cfg, device)
 
     # --- 3. Load and Preprocess Dataset ---
-    try: processed_dataset = load_and_preprocess_dataset(cfg, tokenizer) # Reusable
-    except Exception as e: logger.error(f"Failed to load/preprocess dataset: {e}", exc_info=True); return
+    processed_dataset = load_and_preprocess_dataset(cfg, tokenizer) # Reusable
 
     # --- 4. Setup Optimizer & Scheduler ---
-    try: optimizer, lr_scheduler = setup_optimizer_grpo(cfg, actor_model)
-    except Exception as e: logger.error(f"Failed to setup optimizer/scheduler: {e}", exc_info=True); return
+    optimizer, lr_scheduler = setup_optimizer_grpo(cfg, actor_model)
 
     # --- 5. Generation Config ---
     gen_config = create_generation_config_grpo(cfg, tokenizer)
@@ -759,9 +740,7 @@ def train_grpo(cfg: DictConfig):
     # --- 6. Collate Function (Reusable from PPO) ---
     def collate_fn(batch):
         input_ids = [item['input_ids'] for item in batch]
-        try:
-            padded_inputs = tokenizer.pad({"input_ids": input_ids}, padding='longest', return_tensors="pt", return_attention_mask=True)
-        except Exception as e: logger.error(f"Error during tokenizer.pad: {e}"); return None
+        padded_inputs = tokenizer.pad({"input_ids": input_ids}, padding='longest', return_tensors="pt", return_attention_mask=True)
         ground_truths = [item['ground_truth_answer'] for item in batch]
         return {"prompt_input_ids": padded_inputs["input_ids"],
                 "prompt_attention_mask": padded_inputs["attention_mask"],
@@ -792,12 +771,9 @@ def train_grpo(cfg: DictConfig):
             collate_fn=collate_fn
         )
 
-        try:
-            rollout_buffer = perform_rollouts_grpo(
-                actor_model, ref_model, tokenizer, prompt_dataloader, gen_config, group_size, device
-            )
-        except Exception as e:
-            logger.error(f"Error during GRPO rollout phase: {e}", exc_info=True); continue
+        rollout_buffer = perform_rollouts_grpo(
+            actor_model, ref_model, tokenizer, prompt_dataloader, gen_config, group_size, device
+        )
 
         # Validate rollout buffer
         if not rollout_buffer or "rewards" not in rollout_buffer or \
@@ -826,12 +802,9 @@ def train_grpo(cfg: DictConfig):
 
         # --- Phase 2: Update ---
         logger.info("Phase 2: Performing GRPO Updates...")
-        try:
-            metrics = perform_grpo_updates(
-                actor_model, optimizer, lr_scheduler, rollout_buffer, cfg, device
-            )
-        except Exception as e:
-             logger.error(f"Error during GRPO update phase: {e}", exc_info=True); metrics = {}
+        metrics = perform_grpo_updates(
+            actor_model, optimizer, lr_scheduler, rollout_buffer, cfg, device
+        )
 
         # Log metrics
         log_data = {}
@@ -852,8 +825,7 @@ def train_grpo(cfg: DictConfig):
         log_data["rollout/timing_collate_seconds"] = collation_time
 
         if cfg.wandb.get("report_to_wandb", False) and metrics:
-            try: wandb.log(log_data, step=grpo_step)
-            except Exception as e: logger.error(f"Failed to log to WandB: {e}")
+            wandb.log(log_data, step=grpo_step)
 
         # --- Phase 3: Save Checkpoint ---
         if (grpo_step + 1) % cfg.training.save_interval == 0:
@@ -861,8 +833,7 @@ def train_grpo(cfg: DictConfig):
 
     # --- 8. Final Save ---
     if cfg.wandb.get("report_to_wandb", False):
-        try: wandb.finish()
-        except Exception as e: logger.error(f"Error finishing WandB run: {e}")
+        wandb.finish()
     logger.info("\n--- GRPO Training Finished ---")
     save_model_grpo(actor_model, tokenizer, os.path.join(output_dir, "final"))
 
@@ -894,8 +865,7 @@ def load_config_with_cli_overrides_grpo() -> DictConfig:
         cfg = OmegaConf.merge(cfg, cli_conf)
 
     # Resolve interpolations
-    try: OmegaConf.resolve(cfg)
-    except Exception as e: logger.warning(f"Config resolution error: {e}")
+    OmegaConf.resolve(cfg)
 
     # Add a default grpo section if missing, e.g., for group_size
     if 'grpo' not in cfg:
