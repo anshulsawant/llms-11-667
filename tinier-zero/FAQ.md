@@ -147,9 +147,9 @@ This measures the difference between the reward we got ($`r_t`$) plus the discou
 
 * **GAE (The Compromise):** Generalized Advantage Estimation combines these ideas using a parameter $\lambda$ (`lam` in the code) to balance bias and variance. The GAE formula is essentially a geometrically decaying sum of TD errors:
 	
-	```math
+```math
 	A_t^{GAE} = \delta_t + (\gamma \lambda) \delta_{t+1} + (\gamma \lambda)^2 \delta_{t+2} + \dots = \sum_{l=0}^{\infty} (\gamma \lambda)^l \delta_{t+l}
-	```
+```
 
 	* If $\lambda = 0$, $`A_t^{GAE} = \delta_t`$ (TD Error).
     * If $\lambda = 1$, $`A_t^{GAE}$ approximates the Monte Carlo advantage G_t - V(s_t)`$.
