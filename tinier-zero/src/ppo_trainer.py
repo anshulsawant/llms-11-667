@@ -26,7 +26,7 @@ from transformers import (
     BitsAndBytesConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    DataCollatorWithPadding # Can be useful if not using custom collate
+    DataCollatorWithPadding  # Can be useful if not using custom collate
 )
 from datasets import load_dataset, Dataset
 import numpy as np
@@ -40,9 +40,9 @@ import argparse
 import sys
 from typing import List, Dict, Any, Tuple, Optional
 import accelerate
+
 accelerator = accelerate.Accelerator()
 from accelerate import logging
-
 
 # ==============================================================================
 # == 1. Helper Functions (Masking, Reward, Padding)
@@ -98,13 +98,14 @@ def extract_gsm8k_solution(solution_str: str) -> Optional[str]:
     """
     # Use strict method first: Search for #### followed by a potential number
     # The regex captures digits, optional sign, dots, and commas.
-    solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+", solution_str)
-    solution = '' if solution_match is None else solution_match.group(1) 
+    solution_match = re.search(r"####\s*([-+]?\s*[\d\.\,]+)(?:\s|$)+",
+                               solution_str)
+    solution = '' if solution_match is None else solution_match.group(1)
     try:
-        float(solution) 
+        float(solution)
         return solution
     except ValueError:
-        return None # Not a valid number, return None
+        return None  # Not a valid number, return None
 
 
 def compute_gsm8k_reward(generated_text: str, ground_truth_str: str) -> float:
@@ -131,7 +132,7 @@ def pad_and_collate_tensors(tensor_list: List[torch.Tensor],
     """
     # Find max length in the second dimension (sequence length)
     max_len = max([t.shape[1] for t in tensor_list])
-    
+
     if max_len == 0:  # Handle cases where all sequences have length 0
         total_batch_size = sum(t.shape[0] for t in tensor_list)
         # Return shape (TotalB, 0, ...) matching original dims > 1
@@ -148,9 +149,9 @@ def pad_and_collate_tensors(tensor_list: List[torch.Tensor],
         if padding_needed > 0:
             pad_tuple = (0, padding_needed, 0, 0)
             t = F.pad(t,
-                             tuple(pad_tuple),
-                             mode='constant',
-                             value=padding_value)
+                      tuple(pad_tuple),
+                      mode='constant',
+                      value=padding_value)
         padded_list.append(t)  # No padding needed or already max length
 
     # Concatenate the padded tensors along the batch dimension (dim=0)
@@ -224,14 +225,12 @@ def pad_and_collate_tensors(tensor_list: List[torch.Tensor],
 # D. Repeat: The entire cycle (Rollout -> GAE -> Update) repeats.
 # =========================================================
 
+
 # --- EXERCISE 1 START ---
 def compute_policy_loss(
-    log_probs_new: torch.Tensor,
-    log_probs_old: torch.Tensor,
-    advantages: torch.Tensor,
-    response_mask: torch.Tensor,
-    clip_ratio: float
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        log_probs_new: torch.Tensor, log_probs_old: torch.Tensor,
+        advantages: torch.Tensor, response_mask: torch.Tensor,
+        clip_ratio: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     EXERCISE: Implement PPO policy loss (clipped surrogate objective).
     WHY Clipped Objective?: Standard policy gradient updates `log_prob * Advantage`. If the advantage
@@ -262,33 +261,23 @@ def compute_policy_loss(
         clip_frac (torch.Tensor): Scalar fraction of clipped samples.
         approx_kl (torch.Tensor): Scalar approximate KL divergence.
     """
-    policy_loss = torch.tensor(0.0, device=log_probs_new.device, requires_grad=True) # Ensure grad enabled
-    clip_frac = torch.tensor(0.0, device=log_probs_new.device)
-    approx_kl = torch.tensor(0.0, device=log_probs_new.device)
-
-    # <<<< YOUR POLICY LOSS IMPLEMENTATION HERE >>>>
-    # Hints: Use torch.exp, torch.clamp, torch.min, masked_mean.
-    # Remember the negative sign for the final loss.
-    # Use torch.no_grad() context for clip_frac and approx_kl calculation.
-    # Ensure advantages shape matches log_probs_old shape.
-    if advantages.shape != log_probs_old.shape:
-         print(f"Warning: Shape mismatch in compute_policy_loss. Advantages: {advantages.shape}, LogProbs Old: {log_probs_old.shape}")
-         # Handle shape mismatch or raise error if necessary
-
-    print("Warning: compute_policy_loss not implemented!") # Remove this line
+    r = torch.exp(torch.clamp(log_probs_new, -20, 20) - torch.clamp(log_probs_old, -20, 20))
+    clipped_ratio = torch.clamp(r, 1 - clip_ratio, 1 + clip_ratio)
+    clip_frac = masked_mean(torch.isclose(r, clipped_ratio).to(torch.float32), response_mask)
+    policy_loss = masked_mean(-torch.min(r * advantages, clipped_ratio * advantages), response_mask)
+    approx_kl = masked_mean((log_probs_new - log_probs_old).to(device=log_probs_new.device), response_mask)
 
     return policy_loss, clip_frac, approx_kl
+
+
 # --- EXERCISE 1 END ---
 
 
 # --- EXERCISE 2 START ---
 def compute_value_loss(
-    values_new: torch.Tensor,
-    values_old: torch.Tensor,
-    returns: torch.Tensor,
-    response_mask: torch.Tensor,
-    clip_range_value: float
-) -> Tuple[torch.Tensor, torch.Tensor]:
+        values_new: torch.Tensor, values_old: torch.Tensor,
+        returns: torch.Tensor, response_mask: torch.Tensor,
+        clip_range_value: float) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     EXERCISE: Implement PPO value loss (clipped).
     WHY Clipped Value Loss?: Similar to the policy loss, clipping the value function update helps
@@ -318,21 +307,27 @@ def compute_value_loss(
         value_loss (torch.Tensor): Scalar value loss.
         vf_clip_frac (torch.Tensor): Scalar fraction of clipped value samples.
     """
-    value_loss = torch.tensor(0.0, device=values_new.device, requires_grad=True) # Ensure grad enabled
-    vf_clip_frac = torch.tensor(0.0, device=values_new.device)
 
-    # <<<< YOUR VALUE LOSS IMPLEMENTATION HERE >>>>
     # Hints: Use torch.clamp, torch.max, masked_mean. Remember the 0.5 factor.
     # Use torch.no_grad() context for vf_clip_frac calculation.
 
-    print("Warning: compute_value_loss not implemented!") # Remove this line
+    values_clipped = values_old + torch.clamp(values_new - values_old, -clip_range_value, clip_range_value)
+    loss_clipped = torch.pow(values_clipped - returns, 2)
+    loss = torch.pow(values_new - returns, 2)
+    value_loss = 0.5 * masked_mean(torch.max(loss_clipped, loss), response_mask)
 
+    vf_clip_frac = 1.0 - masked_mean(torch.isclose(values_clipped, values_new).to(torch.float32), response_mask)
+    
+    
     return value_loss, vf_clip_frac
+
+
 # --- EXERCISE 2 END ---
 
 
 # --- EXERCISE 3 START ---
-def compute_entropy_loss(logits_new: torch.Tensor, response_mask: torch.Tensor) -> torch.Tensor:
+def compute_entropy_loss(logits_new: torch.Tensor,
+                         response_mask: torch.Tensor) -> torch.Tensor:
     """
     EXERCISE: Implement entropy loss calculation.
     WHY Entropy Bonus?: Entropy measures the randomness or uncertainty of the policy's action
@@ -355,27 +350,20 @@ def compute_entropy_loss(logits_new: torch.Tensor, response_mask: torch.Tensor) 
     Returns:
         entropy_loss (torch.Tensor): Scalar entropy loss.
     """
-    entropy_loss = torch.tensor(0.0, device=logits_new.device, requires_grad=True) # Ensure grad enabled
+    return -masked_mean(torch.distributions.Categorical(logits=logits_new.float()).entropy(), response_mask)
 
-    # <<<< YOUR ENTROPY LOSS IMPLEMENTATION HERE >>>>
-    # Hints: Use torch.distributions.Categorical(logits=...).entropy().
-    # Remember to use masked_mean and the negative sign.
 
-    print("Warning: compute_entropy_loss not implemented!") # Remove this line
-
-    return entropy_loss
 # --- EXERCISE 3 END ---
 
 
 # --- EXERCISE 4 START ---
 def compute_gae_advantages(
-    final_rewards: torch.Tensor, # Shape (batch_size,)
-    kl_penalties: torch.Tensor, # Shape (batch_size, resp_len)
-    values: torch.Tensor,       # Shape (batch_size, resp_len) - V(s_t) used for return G_t
-    response_mask: torch.Tensor,# Shape (batch_size, resp_len)
-    gamma: float,
-    lam: float
-) -> Tuple[torch.Tensor, torch.Tensor]:
+        final_rewards: torch.Tensor,  # Shape (batch_size,)
+        kl_penalties: torch.Tensor,  # Shape (batch_size, resp_len)
+        values: torch.Tensor,  # Shape (batch_size, resp_len) - V(s_t) used for return G_t
+        response_mask: torch.Tensor,  # Shape (batch_size, resp_len)
+        gamma: float,
+        lam: float) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     EXERCISE: Implement Generalized Advantage Estimation (GAE).
     WHY GAE?: Standard reward-to-go sums rewards but can have high variance. Value functions
@@ -396,6 +384,19 @@ def compute_gae_advantages(
         gamma (float): Discount factor for future rewards.
         lam (float): GAE lambda parameter for bias-variance trade-off.
 
+    Concepts:
+    For a given policy pi, A(s, a) = Q(s, a) - V(s), where:
+    Q(s,a): Total expected discounted future reward starting from state s, taking action a and following pi thereafter.
+    V(s): Total expected discounted future reward starting from state s and following pi thereafter.
+    Given the rollouts under policy pi, Advantage can be estimated 2 ways
+    1. Actual future rewards under the policy (sum_{t in k to T} gamma^{t-k} r_t).
+    2 OR,  TD (temporal difference) delta_t = r_t  + gamma * V(s_{t+1}) - V(s_t)
+    The first method has high varience as it is computed from just one trace from the policy.
+    The second method has high bias as it is entirely dependent on value function being learned. GAE combines the tune providing
+    a knob for tuning policy bias and varience.
+    GAE = sum_{t in k to T} (gamma * lambda)^(t-k) * delta_t
+    Thus, GAE is EMA of future TDs, where future TDs. Recall the future rewards have a discount factor of gamma.
+    
     Steps:
     1. Initialize `advantages` tensor.
     2. Construct `token_level_rewards`: Start with zeros, apply `final_rewards` at the last valid token position
@@ -412,69 +413,77 @@ def compute_gae_advantages(
 
     Returns:
         advantages (torch.Tensor): Shape (batch_size, response_length) - Whitened advantages.
-        returns (torch.Tensor): Shape (batch_size, response_length) - Calculated returns.
+        returns (torch.Tensor): Shape (batch_size, response_length) - Calculated returns. Returns are target for value function training.
     """
-    advantages = torch.zeros_like(values) # Placeholder
-    returns = torch.zeros_like(values)    # Placeholder
 
     # --- IMPORTANT: GAE calculation should not track gradients ---
+    # There are no parameters here to update. Don't track gradients.
     with torch.no_grad():
-        # <<<< YOUR GAE IMPLEMENTATION HERE >>>>
-        # Hints:
-        # - Loop backwards from `response_length - 1` down to `0`.
-        # - Keep track of `last_gae_lam` (advantage estimate for t+1).
-        # - Get `next_values` carefully, handling the edge case `t == response_length - 1`.
-        # - Use `response_mask` correctly when accessing values and propagating `last_gae_lam`.
-        # - Remember to whiten the final advantages.
-
-        print("Warning: compute_gae_advantages not implemented!") # Remove this line
-
-        # Dummy implementation for shape consistency during testing:
-        advantages = masked_whiten(torch.randn_like(values), response_mask)
-        returns = advantages + values
+        advantages = torch.zeros((values.size(0), values.size(1) + 1), dtype=values.dtype)
+        alpha = gamma * lam
+        max_resp_length = values.size(1)
+        mask = response_mask == 0
+        values = values.clone().detach().masked_fill(mask, 0.0)
+        final_token_index = torch.clamp(torch.sum(response_mask, dim=1) - 1, min=0)
+        rewards = torch.zeros_like(values).to(final_rewards.dtype)
+        rewards[torch.arange(final_rewards.size(0)), final_token_index] = final_rewards
+        rewards = rewards - kl_penalties
+        rewards.masked_fill_(mask, 0.0)
+        delta = rewards - values
+        delta = delta + (gamma * F.pad(values, (0, 1), mode='constant', value=0)[:, 1:])
+        for t in reversed(range(max_resp_length)):
+           advantages[:,t] = (delta[:,t] + alpha * advantages[:, t + 1])
+        returns = advantages[:, :values.size(1)] + values
+        print(rewards)
+        print(delta)
+        print(advantages)
+        print(returns)
+        advantages = masked_whiten(advantages[:, :values.size(1)], response_mask)
 
     return advantages, returns
-# --- EXERCISE 4 END ---
 
+
+# --- EXERCISE 4 END ---
 
 # ==============================================================================
 # == 3. Actor Model Definition - PROVIDED
 # ==============================================================================
+
 
 class ActorModelWithValueHead(nn.Module):
     """
     Wraps a pre-trained transformer, adding a value head and generation method.
     Computes per-token values.
     """
+
     def __init__(self, model_name_or_path: str, **kwargs_model_load):
         """Initializes the model, loading the base transformer and value head."""
         super().__init__()
-        self.base_model = AutoModelForCausalLM.from_pretrained(model_name_or_path, **kwargs_model_load)
-        self.config = self.base_model.config # Store config
+        self.base_model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path, **kwargs_model_load)
+        self.config = self.base_model.config  # Store config
         # Value head maps hidden states to scalar value
         self.value_head = nn.Linear(self.config.hidden_size, 1)
         # Basic initialization for value head
         self.value_head.weight.data.normal_(mean=0.0, std=0.01)
         self.value_head.bias.data.zero_()
 
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        **kwargs
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self,
+                input_ids: torch.Tensor,
+                attention_mask: Optional[torch.Tensor] = None,
+                **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass: computes logits and per-token values."""
         outputs = self.base_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            output_hidden_states=True, # Need hidden states for value head
-            **kwargs
-        )
+            output_hidden_states=True,  # Need hidden states for value head
+            **kwargs)
         logits = outputs.logits
         # Get last hidden state (batch, seq_len, hidden_size)
         last_hidden_state = outputs.hidden_states[-1]
         # Compute value for each token's hidden state
-        values = self.value_head(last_hidden_state).squeeze(-1) # Shape: (batch, seq_len)
+        values = self.value_head(last_hidden_state).squeeze(
+            -1)  # Shape: (batch, seq_len)
         return logits, values
 
     @torch.no_grad()
@@ -487,21 +496,19 @@ class ActorModelWithValueHead(nn.Module):
 # == 4. Rollout Phase Logic
 # ==============================================================================
 
+
 def generate_responses(
-    model: ActorModelWithValueHead,
-    tokenizer: PreTrainedTokenizerBase,
-    prompt_ids: torch.Tensor,
-    prompt_mask: torch.Tensor,
-    gen_config: GenerationConfig
-) -> Tuple[torch.Tensor, torch.Tensor]:
+        model: ActorModelWithValueHead, tokenizer: PreTrainedTokenizerBase,
+        prompt_ids: torch.Tensor, prompt_mask: torch.Tensor,
+        gen_config: GenerationConfig) -> Tuple[torch.Tensor, torch.Tensor]:
     """Generates responses for a batch of prompts."""
-    model.eval() # Ensure model is in eval mode for generation
+    model.eval()  # Ensure model is in eval mode for generation
     with torch.no_grad():
         generated_output = model.generate(
             input_ids=prompt_ids,
             attention_mask=prompt_mask,
             generation_config=gen_config,
-            pad_token_id=tokenizer.pad_token_id # Important for generation
+            pad_token_id=tokenizer.pad_token_id  # Important for generation
         )
         # Extract only generated tokens (after prompt)
         response_ids = generated_output[:, prompt_ids.shape[1]:]
@@ -514,10 +521,10 @@ def calculate_rollout_stats(
     actor_model: ActorModelWithValueHead,
     ref_model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
-    prompt_ids: torch.Tensor,      # Shape (batch, prompt_len)
-    prompt_mask: torch.Tensor,     # Shape (batch, prompt_len)
-    response_ids: torch.Tensor,    # Shape (batch, resp_len)
-    response_mask: torch.Tensor    # Shape (batch, resp_len)
+    prompt_ids: torch.Tensor,  # Shape (batch, prompt_len)
+    prompt_mask: torch.Tensor,  # Shape (batch, prompt_len)
+    response_ids: torch.Tensor,  # Shape (batch, resp_len)
+    response_mask: torch.Tensor  # Shape (batch, resp_len)
 ) -> Dict[str, torch.Tensor]:
     """Calculates logprobs, ref_logprobs, values, and rewards for a batch."""
     actor_model.eval()
@@ -528,7 +535,8 @@ def calculate_rollout_stats(
         full_mask = torch.cat((prompt_mask, response_mask), dim=1)
 
         # Get actor logits and values
-        actor_logits, actor_values = actor_model(full_ids, attention_mask=full_mask)
+        actor_logits, actor_values = actor_model(full_ids,
+                                                 attention_mask=full_mask)
         # Get reference model logits
         ref_logits = ref_model(full_ids, attention_mask=full_mask).logits
 
@@ -540,17 +548,24 @@ def calculate_rollout_stats(
         # Logits/Values indices: We need state BEFORE generating token R_t
         # Corresponds to indices from prompt_len-1 to full_len-2
         start_idx = prompt_len - 1
-        end_idx = full_len - 1 # Slice up to (but not including) this index
+        end_idx = full_len - 1  # Slice up to (but not including) this index
 
         if start_idx < 0 or end_idx <= start_idx or resp_len == 0:
             # Handle cases with empty response or invalid indices
-            logprobs = torch.empty((prompt_ids.shape[0], 0), dtype=torch.float, device=prompt_ids.device)
-            ref_logprobs = torch.empty((prompt_ids.shape[0], 0), dtype=torch.float, device=prompt_ids.device)
-            values = torch.empty((prompt_ids.shape[0], 0), dtype=torch.float, device=prompt_ids.device)
+            logprobs = torch.empty((prompt_ids.shape[0], 0),
+                                   dtype=torch.float,
+                                   device=prompt_ids.device)
+            ref_logprobs = torch.empty((prompt_ids.shape[0], 0),
+                                       dtype=torch.float,
+                                       device=prompt_ids.device)
+            values = torch.empty((prompt_ids.shape[0], 0),
+                                 dtype=torch.float,
+                                 device=prompt_ids.device)
         else:
             logits_resp = actor_logits[:, start_idx:end_idx, :]
             ref_logits_resp = ref_logits[:, start_idx:end_idx, :]
-            values = actor_values[:, start_idx:end_idx] # Values for states BEFORE response tokens
+            values = actor_values[:, start_idx:
+                                  end_idx]  # Values for states BEFORE response tokens
 
             # Target IDs are the response tokens
             target_ids = response_ids
@@ -564,16 +579,17 @@ def calculate_rollout_stats(
                 target_ids = target_ids[:, :min_len]
                 values = values[:, :min_len]
                 # Adjust response mask as well if lengths mismatch
-                response_mask_adjusted = response_mask[:,:min_len]
+                response_mask_adjusted = response_mask[:, :min_len]
             else:
-                 response_mask_adjusted = response_mask
-
+                response_mask_adjusted = response_mask
 
             # Calculate log probabilities
             logprobs_all = F.log_softmax(logits_resp, dim=-1)
             ref_logprobs_all = F.log_softmax(ref_logits_resp, dim=-1)
-            logprobs = torch.gather(logprobs_all, 2, target_ids.unsqueeze(-1)).squeeze(-1)
-            ref_logprobs = torch.gather(ref_logprobs_all, 2, target_ids.unsqueeze(-1)).squeeze(-1)
+            logprobs = torch.gather(logprobs_all, 2,
+                                    target_ids.unsqueeze(-1)).squeeze(-1)
+            ref_logprobs = torch.gather(ref_logprobs_all, 2,
+                                        target_ids.unsqueeze(-1)).squeeze(-1)
 
             # Apply mask (mask should match the potentially adjusted length)
             logprobs = logprobs * response_mask_adjusted
@@ -587,21 +603,25 @@ def calculate_rollout_stats(
     }
 
 
-def perform_rollouts(
-    actor_model: ActorModelWithValueHead,
-    ref_model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    prompt_dataloader: DataLoader,
-    gen_config: GenerationConfig,
-    device: torch.device
-) -> Dict[str, Any]:
+def perform_rollouts(actor_model: ActorModelWithValueHead,
+                     ref_model: PreTrainedModel,
+                     tokenizer: PreTrainedTokenizerBase,
+                     prompt_dataloader: DataLoader,
+                     gen_config: GenerationConfig,
+                     device: torch.device) -> Dict[str, Any]:
     """Generates responses and computes stats for PPO update."""
     # Temporary buffer to store results from each batch before collation
     buffer_lists = {
-        "prompt_input_ids": [], "prompt_attention_mask": [],
-        "response_input_ids": [], "response_attention_mask": [],
-        "logprobs": [], "ref_logprobs": [], "values": [],
-        "rewards": [], "full_texts": [], "ground_truth_answers": []
+        "prompt_input_ids": [],
+        "prompt_attention_mask": [],
+        "response_input_ids": [],
+        "response_attention_mask": [],
+        "logprobs": [],
+        "ref_logprobs": [],
+        "values": [],
+        "rewards": [],
+        "full_texts": [],
+        "ground_truth_answers": []
     }
 
     progress_bar = tqdm(prompt_dataloader, desc="Rollout", leave=False)
@@ -611,22 +631,22 @@ def perform_rollouts(
             continue
         prompt_ids = batch["prompt_input_ids"].to(device)
         prompt_mask = batch["prompt_attention_mask"].to(device)
-        ground_truths = batch["ground_truth_answers"] # List of strings
+        ground_truths = batch["ground_truth_answers"]  # List of strings
 
         # 1. Generate responses
         response_ids, response_mask = generate_responses(
-            actor_model, tokenizer, prompt_ids, prompt_mask, gen_config
-        ) # Shapes: (B, R_i), (B, R_i)
+            actor_model, tokenizer, prompt_ids, prompt_mask,
+            gen_config)  # Shapes: (B, R_i), (B, R_i)
 
         # 2. Calculate stats (logprobs, values, etc.)
         stats = calculate_rollout_stats(
-            actor_model, ref_model, tokenizer,
-            prompt_ids, prompt_mask, response_ids, response_mask
-        ) # Dict of tensors (B, R_i)
+            actor_model, ref_model, tokenizer, prompt_ids, prompt_mask,
+            response_ids, response_mask)  # Dict of tensors (B, R_i)
 
         # 3. Decode texts and calculate rewards
         full_ids = torch.cat((prompt_ids, response_ids), dim=1)
-        full_decoded_texts = tokenizer.batch_decode(full_ids, skip_special_tokens=True)
+        full_decoded_texts = tokenizer.batch_decode(full_ids,
+                                                    skip_special_tokens=True)
         rewards = torch.tensor(
             [
                 compute_gsm8k_reward(txt, gt)
@@ -644,7 +664,7 @@ def perform_rollouts(
         buffer_lists["logprobs"].append(stats["logprobs"].cpu())
         buffer_lists["ref_logprobs"].append(stats["ref_logprobs"].cpu())
         buffer_lists["values"].append(stats["values"].cpu())
-        buffer_lists["rewards"].append(rewards) # Already on CPU
+        buffer_lists["rewards"].append(rewards)  # Already on CPU
         buffer_lists["full_texts"].extend(full_decoded_texts)
         buffer_lists["ground_truth_answers"].extend(ground_truths)
 
@@ -652,34 +672,43 @@ def perform_rollouts(
     individual_lengths = []
     # Iterate through the list of batch masks
     for mask_batch in buffer_lists["response_attention_mask"]:
-        if mask_batch.numel() > 0: # Ensure tensor is not empty
+        if mask_batch.numel() > 0:  # Ensure tensor is not empty
             # Sum along the sequence dimension (dim=1) to get lengths per sequence in the batch
             lengths_in_batch = mask_batch.sum(dim=1)
             # Extend the master list with individual lengths from this batch
-            individual_lengths.extend(lengths_in_batch.cpu().numpy()) # Use .numpy() or .tolist()
+            individual_lengths.extend(
+                lengths_in_batch.cpu().numpy())  # Use .numpy() or .tolist()
 
     avg_resp_len = np.mean(individual_lengths) if individual_lengths else 0.0
 
-    logging.info(f"Average response length for this rollout: {avg_resp_len:.2f}")
+    logging.info(
+        f"Average response length for this rollout: {avg_resp_len:.2f}")
     collated_buffer = {}
     padding_value_map = {
-        "input_ids": tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0,
-        "attention_mask": 0,
-        "logprobs": 0.0, "ref_logprobs": 0.0, "values": 0.0,
+        "input_ids":
+        tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0,
+        "attention_mask":
+        0,
+        "logprobs":
+        0.0,
+        "ref_logprobs":
+        0.0,
+        "values":
+        0.0,
     }
     keys_to_pad_and_cat = [
-        "prompt_input_ids", "prompt_attention_mask",
-        "response_input_ids", "response_attention_mask",
-        "logprobs", "ref_logprobs", "values"
+        "prompt_input_ids", "prompt_attention_mask", "response_input_ids",
+        "response_attention_mask", "logprobs", "ref_logprobs", "values"
     ]
 
     for key, data_list in buffer_lists.items():
         if key in ["full_texts", "ground_truth_answers"]:
-            collated_buffer[key] = data_list # Keep as list
+            collated_buffer[key] = data_list  # Keep as list
         elif not data_list:
-            collated_buffer[key] = torch.empty(0) # Handle empty list
+            collated_buffer[key] = torch.empty(0)  # Handle empty list
         elif key == "rewards":
-            collated_buffer[key] = torch.cat(data_list, dim=0) # Simple concat for 1D rewards
+            collated_buffer[key] = torch.cat(
+                data_list, dim=0)  # Simple concat for 1D rewards
         elif key in keys_to_pad_and_cat:
             # Determine padding value
             pad_val = 0.0
@@ -691,7 +720,8 @@ def perform_rollouts(
             collated_buffer[key] = pad_and_collate_tensors(
                 data_list, padding_value=pad_val)
         else:
-            logging.info(f"Warning: Unexpected key '{key}' in buffer collation.")
+            logging.info(
+                f"Warning: Unexpected key '{key}' in buffer collation.")
             collated_buffer[key] = data_list  # Keep as is
 
     return collated_buffer
@@ -700,6 +730,7 @@ def perform_rollouts(
 # ==============================================================================
 # == 5. PPO Update Phase Logic
 # ==============================================================================
+
 
 # --- EXERCISE 5 START (Inside run_ppo_update_epoch) ---
 def run_ppo_update_epoch(
@@ -713,7 +744,7 @@ def run_ppo_update_epoch(
     """Runs one PPO epoch with mini-batch updates."""
     actor_model.train()
     aggregate_metrics = {}
-    ppo_step_count = 0 # For gradient accumulation tracking
+    ppo_step_count = 0  # For gradient accumulation tracking
 
     # Load data from buffer (already collated)
     prompt_ids = collated_buffer["prompt_input_ids"]
@@ -745,6 +776,8 @@ def run_ppo_update_epoch(
     np.random.shuffle(indices)
     prompt_len = prompt_ids.shape[1]
     resp_len = response_ids.shape[1]
+    prompt_indices = np.arange(num_prompts)
+    
 
     for i in range(0, num_samples, cfg.ppo.mini_batch_size):
         ppo_step_count += 1
@@ -763,13 +796,15 @@ def run_ppo_update_epoch(
         # <<<< YOUR PPO MINI-BATCH UPDATE IMPLEMENTATION HERE >>>>
         # Steps:
         # 1. Forward Pass: Get new logits and values from actor_model for the mini-batch.
-        #    logits_new, values_new = actor_model(batch_full_ids, attention_mask=batch_full_mask)
-        #
+        # logits_new, values_new = ... Shape (mini_batch, prompt_len + resp_len)
+        logits_new, values_new = actor_model(batch_full_ids, attention_mask=batch_full_mask)
+        logits_resp = logits_new[:, (prompt_len - 1) : (prompt_len + resp_len - 1), :]
         # 2. Calculate New Logprobs: Extract logits corresponding to response tokens.
         #    Be careful with slicing indices (use prompt_len, resp_len).
         #    Calculate log_softmax and gather logprobs for `batch_response_tokens`.
-        #    logprobs_new = gather(log_softmax(logits_new_resp), labels=batch_response_tokens)
         #    Shape: (mini_batch, resp_len)
+        logprobs_new = torch.gather(log_softmax(logits_new_resp), dim=-1,
+                                    batch_response_tokens.unsqueeze(-1)).squeese(-1)
         #
         # 3. Extract New Values: Slice `values_new` to get values corresponding to response states.
         #    values_new_response = values_new[:, start_idx:end_idx]
@@ -803,7 +838,6 @@ def run_ppo_update_epoch(
             )
             continue
 
-
         # 7. Optimizer Step (if accumulation cycle complete)
         if ppo_step_count % cfg.ppo.gradient_accumulation_steps == 0:
             # Check if grads exist before clipping/stepping
@@ -813,7 +847,8 @@ def run_ppo_update_epoch(
             if grads_exist:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     actor_model.parameters(), max_norm=cfg.ppo.max_grad_norm)
-                aggregate_metrics.setdefault('params/grad_norm', []).append(grad_norm.item())
+                aggregate_metrics.setdefault('params/grad_norm',
+                                             []).append(grad_norm.item())
                 optimizer.step()
                 lr_scheduler.step()
             # Zero grad AFTER potential step
@@ -826,6 +861,8 @@ def run_ppo_update_epoch(
         for key, val in aggregate_metrics.items() if val
     }
     return final_metrics
+
+
 # --- EXERCISE 5 END ---
 
 
@@ -865,8 +902,9 @@ def perform_ppo_updates(
 
     all_epoch_metrics = {}
     for ppo_epoch in range(cfg.ppo.epochs):
-        epoch_metrics = run_ppo_update_epoch(actor_model, optimizer, lr_scheduler,
-                                             buffer_on_device, cfg, device)
+        epoch_metrics = run_ppo_update_epoch(actor_model, optimizer,
+                                             lr_scheduler, buffer_on_device,
+                                             cfg, device)
         # Aggregate metrics across epochs (e.g., average or store last)
         # Here, we just store the metrics from the last epoch for simplicity
         all_epoch_metrics = epoch_metrics  # Overwrite with last epoch's metrics
@@ -878,6 +916,7 @@ def perform_ppo_updates(
 # == 6. Training Setup and Orchestration
 # ==============================================================================
 
+
 def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
     """Sets random seeds, device, and output directory."""
     random.seed(cfg.training.seed)
@@ -887,7 +926,8 @@ def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
     if cfg.training.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
         torch.cuda.manual_seed_all(cfg.training.seed)
-        logging.info(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
+        logging.info(
+            f"Using CUDA device: {torch.cuda.get_device_name(device)}")
     else:
         if cfg.training.device == "cuda":
             logging.info("Warning: CUDA requested but unavailable, using CPU.")
@@ -903,9 +943,10 @@ def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
 
     return device, output_dir
 
-def load_models_and_tokenizer(cfg: DictConfig, device: torch.device) -> Tuple[
-    ActorModelWithValueHead, PreTrainedModel, PreTrainedTokenizerBase
-]:
+
+def load_models_and_tokenizer(
+    cfg: DictConfig, device: torch.device
+) -> Tuple[ActorModelWithValueHead, PreTrainedModel, PreTrainedTokenizerBase]:
     """Loads tokenizer, actor model (with value head), and reference model."""
     logging.info(f"Loading tokenizer: {cfg.model.tokenizer_name}")
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.tokenizer_name)
@@ -934,15 +975,19 @@ def load_models_and_tokenizer(cfg: DictConfig, device: torch.device) -> Tuple[
         q_cfg = cfg.model.quantization
         logging.info(f"Applying quantization: {q_cfg}")
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
-             load_in_8bit=q_cfg.get("load_in_8bit", False), load_in_4bit=q_cfg.get("load_in_4bit", False),
-             bnb_4bit_quant_type=q_cfg.get("bnb_4bit_quant_type", "nf4"),
-             bnb_4bit_compute_dtype=getattr(torch, q_cfg.get("bnb_4bit_compute_dtype", "float16")),
-             bnb_4bit_use_double_quant=q_cfg.get("bnb_4bit_use_double_quant", False),
+            load_in_8bit=q_cfg.get("load_in_8bit", False),
+            load_in_4bit=q_cfg.get("load_in_4bit", False),
+            bnb_4bit_quant_type=q_cfg.get("bnb_4bit_quant_type", "nf4"),
+            bnb_4bit_compute_dtype=getattr(
+                torch, q_cfg.get("bnb_4bit_compute_dtype", "float16")),
+            bnb_4bit_use_double_quant=q_cfg.get("bnb_4bit_use_double_quant",
+                                                False),
         )
 
     # --- Load Actor Model ---
     actor_model = ActorModelWithValueHead(cfg.model.name, **model_kwargs)
-    if not cfg.model.get("quantization"): actor_model.to(device) # Move if not quantized
+    if not cfg.model.get("quantization"):
+        actor_model.to(device)  # Move if not quantized
     # Ensure pad token ID is set in model config
     if actor_model.config.pad_token_id is None:
         actor_model.config.pad_token_id = tokenizer.pad_token_id
@@ -953,8 +998,10 @@ def load_models_and_tokenizer(cfg: DictConfig, device: torch.device) -> Tuple[
             actor_model.base_model.gradient_checkpointing_enable()
             print("Gradient checkpointing enabled for actor model.")
         except AttributeError:
-             print("Warning: Could not enable gradient checkpointing. Method not found on base_model.")
- 
+            print(
+                "Warning: Could not enable gradient checkpointing. Method not found on base_model."
+            )
+
     # --- Load Reference Model ---
     ref_model_kwargs = model_kwargs.copy()
     ref_model_kwargs.pop("quantization_config",
@@ -965,18 +1012,22 @@ def load_models_and_tokenizer(cfg: DictConfig, device: torch.device) -> Tuple[
     if ref_model.config.pad_token_id is None:
         ref_model.config.pad_token_id = tokenizer.pad_token_id
     # Freeze reference model
-    for param in ref_model.parameters(): param.requires_grad = False
+    for param in ref_model.parameters():
+        param.requires_grad = False
     ref_model.eval()
     logging.info("Reference model loaded and frozen.")
 
     return actor_model, ref_model, tokenizer
 
 
-def load_and_preprocess_dataset(cfg: DictConfig, tokenizer: PreTrainedTokenizerBase) -> Dataset:
+def load_and_preprocess_dataset(cfg: DictConfig,
+                                tokenizer: PreTrainedTokenizerBase) -> Dataset:
     """Loads the dataset and preprocesses it."""
     logging.info(f"Loading dataset: {cfg.dataset.name}")
     try:
-        dataset = load_dataset(cfg.dataset.name, cfg.dataset.get("config"), split=cfg.dataset.split)
+        dataset = load_dataset(cfg.dataset.name,
+                               cfg.dataset.get("config"),
+                               split=cfg.dataset.split)
     except Exception as e:
         logging.info(f"Error loading dataset '{cfg.dataset.name}': {e}")
         raise  # Re-raise critical error
@@ -1014,17 +1065,19 @@ def load_and_preprocess_dataset(cfg: DictConfig, tokenizer: PreTrainedTokenizerB
     try:
         processed_dataset = dataset.map(
             preprocess_function,
-            remove_columns=dataset.column_names # Keep only processed columns
+            remove_columns=dataset.column_names  # Keep only processed columns
         )
         processed_dataset.set_format(type="torch")  # Set format for DataLoader
-        logging.info(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
+        logging.info(
+            f"Dataset preprocessed. Samples: {len(processed_dataset)}")
         return processed_dataset
     except Exception as e:
         logging.info(f"Error during dataset mapping: {e}")
         raise  # Re-raise critical error
 
 
-def setup_optimizer(cfg: DictConfig, model: nn.Module) -> torch.optim.Optimizer:
+def setup_optimizer(cfg: DictConfig,
+                    model: nn.Module) -> torch.optim.Optimizer:
     """Sets up the optimizer based on configuration."""
     use_8bit = cfg.ppo.get("use_8bit_adam", False)
     lr = cfg.ppo.learning_rate
@@ -1052,12 +1105,13 @@ def setup_optimizer(cfg: DictConfig, model: nn.Module) -> torch.optim.Optimizer:
             logging.info("Using standard AdamW Optimizer")
         optimizer = AdamW(model.parameters(), lr=lr)
     lr_scheduler = get_scheduler(
-        cfg.ppo.scheduler, optimizer, cfg.ppo.warmup_steps,
-        num_training_steps=(
-            cfg.training.total_ppo_steps *
-            ((cfg.ppo.rollout_samples // cfg.ppo.mini_batch_size) //
-             cfg.ppo.gradient_accumulation_steps) * cfg.ppo.epochs),
-        scheduler_specific_kwargs={'min_lr' : cfg.ppo.min_lr})
+        cfg.ppo.scheduler,
+        optimizer,
+        cfg.ppo.warmup_steps,
+        num_training_steps=(cfg.training.total_ppo_steps * (
+            (cfg.ppo.rollout_samples // cfg.ppo.mini_batch_size) //
+            cfg.ppo.gradient_accumulation_steps) * cfg.ppo.epochs),
+        scheduler_specific_kwargs={'min_lr': cfg.ppo.min_lr})
     return optimizer, lr_scheduler
 
 
@@ -1074,7 +1128,8 @@ def create_generation_config(
                             pad_token_id=tokenizer.pad_token_id)
 
 
-def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase, save_path: str):
+def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase,
+               save_path: str):
     """Saves the model and tokenizer."""
     if not accelerator.is_main_process:
         return
@@ -1091,9 +1146,11 @@ def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase, save_path: 
     except Exception as e:
         logging.info(f"Error saving model: {e}")
 
+
 # ==============================================================================
 # == 7. Main Training Orchestration
 # ==============================================================================
+
 
 def train(cfg: DictConfig):
     """Main PPO training loop."""
@@ -1106,8 +1163,9 @@ def train(cfg: DictConfig):
     if cfg.wandb.report_to_wandb:
         wandb.init(
             project=cfg.wandb.project,
-            config=OmegaConf.to_container(cfg, resolve=True), # Log resolved config
-            name=cfg.wandb.get("name", None) # Use configured name or default
+            config=OmegaConf.to_container(cfg,
+                                          resolve=True),  # Log resolved config
+            name=cfg.wandb.get("name", None)  # Use configured name or default
         )
 
     # --- 2. Load Models and Tokenizer ---
@@ -1165,9 +1223,9 @@ def train(cfg: DictConfig):
                                        shuffle=False,
                                        collate_fn=collate_fn)
         try:
-            rollout_buffer = perform_rollouts(
-                actor_model, ref_model, tokenizer, prompt_dataloader, gen_config, device
-            )
+            rollout_buffer = perform_rollouts(actor_model, ref_model,
+                                              tokenizer, prompt_dataloader,
+                                              gen_config, device)
         except Exception as e:
             logging.info(f"Error during rollout phase: {e}")
             import traceback
@@ -1191,21 +1249,21 @@ def train(cfg: DictConfig):
         # --- Phase 2: Update ---
         logging.info("Phase 2: Performing PPO Updates...")
         metrics = perform_ppo_updates(actor_model, optimizer, lr_scheduler,
-                                          rollout_buffer, cfg, device)
+                                      rollout_buffer, cfg, device)
         log_data = {}
         log_data.update(metrics)
         # Log metrics
         log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
         logging.info(f"Update Metrics (Avg over Epoch): {log_str}")
         logging.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
-        log_data["rollout/reward_mean"] = avg_reward # Add rollout reward
+        log_data["rollout/reward_mean"] = avg_reward  # Add rollout reward
         if cfg.wandb.report_to_wandb:
             wandb.log(log_data, step=ppo_step)
 
         # --- Phase 3: Save Checkpoint ---
         if (ppo_step + 1) % cfg.training.save_interval == 0:
-            save_model(actor_model, tokenizer, os.path.join(output_dir, f"step_{ppo_step + 1}"))
-
+            save_model(actor_model, tokenizer,
+                       os.path.join(output_dir, f"step_{ppo_step + 1}"))
 
     if cfg.wandb.report_to_wandb:
         wandb.finish()
@@ -1228,7 +1286,7 @@ def load_config_with_cli_overrides() -> DictConfig:
                         help="Key=value config overrides")
     args = parser.parse_args()
 
-    config_path = args.config 
+    config_path = args.config
 
     if not os.path.exists(config_path):
         print(

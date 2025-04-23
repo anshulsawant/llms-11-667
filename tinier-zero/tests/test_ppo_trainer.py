@@ -11,7 +11,7 @@ from omegaconf import OmegaConf # For dummy config if needed by tested funcs
 # --- Import functions from the refactored script ---
 # Adjust the import path if your file structure is different
 try:
-    from ppo_trainer_solutions import (
+    from ppo_trainer import (
         masked_mean,
         masked_whiten,
         extract_gsm8k_solution,
@@ -384,24 +384,25 @@ def test_compute_gae_advantages_masking():
     final_rewards_s = torch.tensor([10.0])
     # Example KL penalties for t=0 and t=1
     kl_penalties_s = torch.tensor([[0.1, 0.2]])
-    # Value estimates V(s0)=1.0, V(s1)=2.0 (V(s1) should be ignored in propagation)
+    # Value estimates V(s0)=1.0, V(s1)=0.0 (V(s1) should be ignored in propagation)
+    # Values for masked portion cannot be non-zero
     values_s = torch.tensor([[1.0, 2.0]])
     gamma = 0.9
     lam = 0.9
 
     # --- Expected Calculation (Manual Trace) ---
-    # Token Rewards: r0 = (10.0 - 0.1) = 9.9; r1 = (0.0 - 0.2) = -0.2
-    # GAE Loop (t=1): delta1 = r1 + g*V(s2)*m2 - V(s1) = -0.2 + g*0*0 - 2.0 = -2.2
-    #                 A1 = delta1 + g*l*A2*m2 = -2.2 + 0 = -2.2
-    # GAE Loop (t=0): delta0 = r0 + g*V(s1)*m1 - V(s0) = 9.9 + 0.9*2.0*0 - 1.0 = 8.9
+    # Token Rewards: r0 = (10.0 - 0.1) = 9.9; r1 = 0.0 
+    # GAE Loop (t=1): delta1 = r1*m1 + g*V(s2)*m2 - V(s1)*m1 = 0.0
+    #                 A1 = delta1 + g*l*A2*m2 = 0.0 + 0 = 0.0 
+    # GAE Loop (t=0): delta0 = r0 * m0 + g*V(s1)*m1 - V(s0) = 9.9 + 0.9*2.0*0 - 1.0 = 8.9
     # A0 = delta0 + g*l*A1*mask_1 = 8.9 + g*l*(-2.2)*0 = 8.9
-    # Advantages (unwhitened): [[8.9, -2.2]]
-    # Returns = Advantages + Values: [[8.9+1.0, -2.2+2.0]] = [[9.9, -0.2]]
+    # Advantages (unwhitened): [[8.9, 0.0]]
+    # Returns = Advantages + Values: [[8.9+1.0, 0.0]] = [[9.9, 0.0]]
     # Whiten Advantages: Mean(masked=8.9)=8.9. Var=0. Std=eps. Whitened=[[(8.9-8.9)/eps, (-2.2-8.9)/eps]] -> [[0.0, large_neg]]. Masked=[[0.0, 0.0]]
 
     advantages_whitened_expected = torch.tensor([[0.0, 0.0]])
     ## r_1 will never actually be used and can be ignored
-    returns_expected = torch.tensor([[9.9, -0.2]]) # Unmasked returns are the target
+    returns_expected = torch.tensor([[9.9, 0.0]]) # Unmasked returns are the target
 
     # --- Run Function ---
     advantages_calc, returns_calc = compute_gae_advantages(
