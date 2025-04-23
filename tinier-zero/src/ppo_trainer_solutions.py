@@ -8,11 +8,7 @@ import wandb
 import accelerate
 accelerator = accelerate.Accelerator()
 from accelerate import logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logger = logging.get_logger(__name__, log_level="INFO")
 import torch
 import time
 from torch import nn
@@ -479,7 +475,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
     progress_bar = tqdm(prompt_dataloader, desc="Rollout", leave=False)
     for batch in progress_bar:
         if batch is None:  # Handle potential error from collate_fn
-            logging.info("Warning: Skipping None batch from dataloader.")
+            logger.info("Warning: Skipping None batch from dataloader.")
             continue
         prompt_ids = batch["prompt_input_ids"].to(device)
         prompt_mask = batch["prompt_attention_mask"].to(device)
@@ -532,7 +528,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
 
     avg_resp_len = np.mean(individual_lengths) if individual_lengths else 0.0
 
-    logging.info(f"Average response length for this rollout: {avg_resp_len:.2f}")
+    logger.info(f"Average response length for this rollout: {avg_resp_len:.2f}")
     collated_buffer = {}
     padding_value_map = {
         "input_ids":
@@ -570,7 +566,7 @@ def perform_rollouts(actor_model: ActorModelWithValueHead,
             collated_buffer[key] = pad_and_collate_tensors(
                 data_list, padding_value=pad_val)
         else:
-            logging.info(f"Warning: Unexpected key '{key}' in buffer collation.")
+            logger.info(f"Warning: Unexpected key '{key}' in buffer collation.")
             collated_buffer[key] = data_list  # Keep as is
 
     return collated_buffer
@@ -703,7 +699,7 @@ def run_ppo_update_epoch(
                 continue
             
             if param.grad is None:
-                logging.warning(f"Gradient is None for trainable parameter: {name}")
+                logger.warning(f"Gradient is None for trainable parameter: {name}")
                 found_none_grad = True
             elif torch.all(param.grad == 0):
                 # Check if the entire gradient tensor is zero
@@ -713,12 +709,12 @@ def run_ppo_update_epoch(
                 found_non_zero_grad = True
                 # --- Summary ---
                 if not found_non_zero_grad:
-                    logging.critical("No non-zero gradients found for any trainable parameter!")
+                    logger.critical("No non-zero gradients found for any trainable parameter!")
                 elif found_none_grad:
-                    logging.warning("Some trainable parameters have None gradients (check graph connection).")
+                    logger.warning("Some trainable parameters have None gradients (check graph connection).")
                     # Optional: Log if only zero grads were found (might indicate issues)
                 elif found_zero_grad and not found_none_grad:
-                    logging.info("All found gradients are zero (check loss function / saturation).")
+                    logger.info("All found gradients are zero (check loss function / saturation).")
                 else:
                     pass
 
@@ -780,9 +776,9 @@ def perform_ppo_updates(
             f"Error moving buffer to device, likely due to non-tensor data: {e}"
         )
         # Print buffer keys and types for debugging
-        logging.info("Rollout Buffer Contents (Keys and Types):")
+        logger.info("Rollout Buffer Contents (Keys and Types):")
         for k, v in rollout_buffer.items():
-            logging.info(f"  {k}: {type(v)}")
+            logger.info(f"  {k}: {type(v)}")
         return {}  # Cannot proceed
 
     # Basic validation after moving to device
@@ -819,19 +815,19 @@ def setup_training(cfg: DictConfig) -> Tuple[torch.device, str]:
     if cfg.training.device == "cuda" and torch.cuda.is_available():
         device = torch.device("cuda")
         torch.cuda.manual_seed_all(cfg.training.seed)
-        logging.info(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
+        logger.info(f"Using CUDA device: {torch.cuda.get_device_name(device)}")
     else:
         if cfg.training.device == "cuda":
-            logging.info("Warning: CUDA requested but unavailable, using CPU.")
+            logger.info("Warning: CUDA requested but unavailable, using CPU.")
         device = torch.device("cpu")
-    logging.info(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
     output_dir = cfg.training.output_dir
     os.makedirs(output_dir, exist_ok=True)
-    logging.info(f"Output directory: {output_dir}")
+    logger.info(f"Output directory: {output_dir}")
     # Save config (optional, can be done in main train loop)
     # try: OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
-    # except Exception as e: logging.info(f"Error saving config: {e}")
+    # except Exception as e: logger.info(f"Error saving config: {e}")
 
     return device, output_dir
 
@@ -840,17 +836,17 @@ def load_models_and_tokenizer(
     cfg: DictConfig, device: torch.device
 ) -> Tuple[ActorModelWithValueHead, PreTrainedModel, PreTrainedTokenizerBase]:
     """Loads tokenizer, actor model (with value head), and reference model."""
-    logging.info(f"Loading tokenizer: {cfg.model.tokenizer_name}")
+    logger.info(f"Loading tokenizer: {cfg.model.tokenizer_name}")
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.tokenizer_name)
     # --- Set Padding Token ---
     if tokenizer.pad_token is None or tokenizer.pad_token_id is None:
-        logging.info("Setting pad_token to eos_token.")
+        logger.info("Setting pad_token to eos_token.")
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
     # Explicitly set padding side (optional, default is often right)
     # tokenizer.padding_side = 'left' # Uncomment to use left padding
 
-    logging.info(f"Loading models: {cfg.model.name}")
+    logger.info(f"Loading models: {cfg.model.name}")
     # --- Model Kwargs (dtype, quantization, etc.) ---
     model_kwargs = {}
     model_dtype_str = cfg.model.get("torch_dtype", "auto")
@@ -865,7 +861,7 @@ def load_models_and_tokenizer(
         model_kwargs["trust_remote_code"] = True
     if cfg.model.get("quantization"):
         q_cfg = cfg.model.quantization
-        logging.info(f"Applying quantization: {q_cfg}")
+        logger.info(f"Applying quantization: {q_cfg}")
         model_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_8bit=q_cfg.get("load_in_8bit", False),
             load_in_4bit=q_cfg.get("load_in_4bit", False),
@@ -883,7 +879,7 @@ def load_models_and_tokenizer(
     # Ensure pad token ID is set in model config
     if actor_model.config.pad_token_id is None:
         actor_model.config.pad_token_id = tokenizer.pad_token_id
-    logging.info("Actor model loaded.")
+    logger.info("Actor model loaded.")
     if cfg.training.get("gradient_checkpointing", False):
         try:
             # Enable on the base model wrapped by ActorModelWithValueHead
@@ -905,7 +901,7 @@ def load_models_and_tokenizer(
     for param in ref_model.parameters():
         param.requires_grad = False
     ref_model.eval()
-    logging.info("Reference model loaded and frozen.")
+    logger.info("Reference model loaded and frozen.")
 
     return actor_model, ref_model, tokenizer
 
@@ -913,20 +909,20 @@ def load_models_and_tokenizer(
 def load_and_preprocess_dataset(cfg: DictConfig,
                                 tokenizer: PreTrainedTokenizerBase) -> Dataset:
     """Loads the dataset and preprocesses it."""
-    logging.info(f"Loading dataset: {cfg.dataset.name}")
+    logger.info(f"Loading dataset: {cfg.dataset.name}")
     try:
         dataset = load_dataset(cfg.dataset.name,
                                cfg.dataset.get("config"),
                                split=cfg.dataset.split)
     except Exception as e:
-        logging.info(f"Error loading dataset '{cfg.dataset.name}': {e}")
+        logger.info(f"Error loading dataset '{cfg.dataset.name}': {e}")
         raise  # Re-raise critical error
 
     # --- Subsetting ---
     num_samples = cfg.training.get("num_samples")
     if num_samples is not None and num_samples > 0 and num_samples <= len(
             dataset):
-        logging.info(f"Subsetting dataset to {num_samples} samples.")
+        logger.info(f"Subsetting dataset to {num_samples} samples.")
         dataset = dataset.select(range(num_samples))
 
     # --- Preprocessing Function ---
@@ -958,10 +954,10 @@ def load_and_preprocess_dataset(cfg: DictConfig,
             remove_columns=dataset.column_names  # Keep only processed columns
         )
         processed_dataset.set_format(type="torch")  # Set format for DataLoader
-        logging.info(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
+        logger.info(f"Dataset preprocessed. Samples: {len(processed_dataset)}")
         return processed_dataset
     except Exception as e:
-        logging.info(f"Error during dataset mapping: {e}")
+        logger.info(f"Error during dataset mapping: {e}")
         raise  # Re-raise critical error
 
 
@@ -983,7 +979,7 @@ def setup_optimizer(cfg: DictConfig,
             )
             optimizer = AdamW(model.parameters(), lr=lr)
         else:
-            logging.info("Using 8-bit AdamW Optimizer (bitsandbytes)")
+            logger.info("Using 8-bit AdamW Optimizer (bitsandbytes)")
             optimizer = bnb_optim.AdamW8bit(model.parameters(), lr=lr)
     else:
         if use_8bit:
@@ -991,7 +987,7 @@ def setup_optimizer(cfg: DictConfig,
                 "Info: 8-bit Adam not used (requirements not met). Using standard AdamW."
             )
         else:
-            logging.info("Using standard AdamW Optimizer")
+            logger.info("Using standard AdamW Optimizer")
         optimizer = AdamW(model.parameters(), lr=lr)
     lr_scheduler = get_scheduler(
         cfg.ppo.scheduler, optimizer, cfg.ppo.warmup_steps,
@@ -1021,7 +1017,7 @@ def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase,
     """Saves the model and tokenizer."""
     if not accelerator.is_main_process:
         return
-    logging.info(f"Saving model checkpoint to {save_path}...")
+    logger.info(f"Saving model checkpoint to {save_path}...")
     os.makedirs(save_path, exist_ok=True)
     try:
         # Handle potential model wrappers (like ActorModelWithValueHead)
@@ -1030,9 +1026,9 @@ def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase,
         # if hasattr(unwrapped_model, 'save_pretrained'):
         unwrapped_model.save_pretrained(save_path)
         tokenizer.save_pretrained(save_path)
-        logging.info(f"Model and tokenizer saved.")
+        logger.info(f"Model and tokenizer saved.")
     except Exception as e:
-        logging.info(f"Error saving model: {e}")
+        logger.info(f"Error saving model: {e}")
 
 
 # ==============================================================================
@@ -1061,14 +1057,14 @@ def train(cfg: DictConfig):
         actor_model, ref_model, tokenizer = load_models_and_tokenizer(
             cfg, device)
     except Exception as e:
-        logging.info(f"Failed to load models/tokenizer: {e}")
+        logger.info(f"Failed to load models/tokenizer: {e}")
         return  # Cannot proceed
 
     # --- 3. Load and Preprocess Dataset ---
     try:
         processed_dataset = load_and_preprocess_dataset(cfg, tokenizer)
     except Exception as e:
-        logging.info(f"Failed to load/preprocess dataset: {e}")
+        logger.info(f"Failed to load/preprocess dataset: {e}")
         return  # Cannot proceed
 
     # --- 4. Setup Optimizer ---
@@ -1087,7 +1083,7 @@ def train(cfg: DictConfig):
                                           return_tensors="pt",
                                           return_attention_mask=True)
         except Exception as e:
-            logging.info(f"Error during tokenizer.pad in collate_fn: {e}")
+            logger.info(f"Error during tokenizer.pad in collate_fn: {e}")
             return None  # Signal error to dataloader loop
         ground_truths = [item['ground_truth_answer'] for item in batch]
         return {
@@ -1097,14 +1093,14 @@ def train(cfg: DictConfig):
         }
 
     # --- 7. Main PPO Loop ---
-    logging.info("\n--- Starting PPO Training ---")
+    logger.info("\n--- Starting PPO Training ---")
     for ppo_step in range(cfg.training.total_ppo_steps):
         print(
             f"\n===== PPO Step {ppo_step + 1}/{cfg.training.total_ppo_steps} ====="
         )
 
         # --- Phase 1: Rollout ---
-        logging.info("Phase 1: Generating Rollouts...")
+        logger.info("Phase 1: Generating Rollouts...")
         prompt_dataloader = DataLoader(processed_dataset.shuffle(
             seed=cfg.training.seed).select(range(cfg.ppo.rollout_samples)),
                                        batch_size=cfg.ppo.batch_size,
@@ -1115,7 +1111,7 @@ def train(cfg: DictConfig):
                                               tokenizer, prompt_dataloader,
                                               gen_config, device)
         except Exception as e:
-            logging.info(f"Error during rollout phase: {e}")
+            logger.info(f"Error during rollout phase: {e}")
             import traceback
             traceback.print_exc()
             continue  # Skip to next PPO step
@@ -1135,15 +1131,15 @@ def train(cfg: DictConfig):
         )
 
         # --- Phase 2: Update ---
-        logging.info("Phase 2: Performing PPO Updates...")
+        logger.info("Phase 2: Performing PPO Updates...")
         metrics = perform_ppo_updates(actor_model, optimizer, lr_scheduler,
                                           rollout_buffer, cfg, device)
         log_data = {}
         log_data.update(metrics)
         # Log metrics
         log_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
-        logging.info(f"Update Metrics (Avg over Epoch): {log_str}")
-        logging.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
+        logger.info(f"Update Metrics (Avg over Epoch): {log_str}")
+        logger.info(f"  Rollout Reward (for this step): {avg_reward:.4f}")
         log_data["rollout/reward_mean"] = avg_reward # Add rollout reward
         if cfg.wandb.report_to_wandb:
             wandb.log(log_data, step=ppo_step)
@@ -1157,7 +1153,7 @@ def train(cfg: DictConfig):
     if cfg.wandb.report_to_wandb:
         wandb.finish()
     # --- 8. Final Save ---
-    logging.info("\n--- PPO Training Finished ---")
+    logger.info("\n--- PPO Training Finished ---")
     save_model(actor_model, tokenizer, os.path.join(output_dir, "final"))
 
 
@@ -1183,19 +1179,19 @@ def load_config_with_cli_overrides() -> DictConfig:
         )
         sys.exit(1)
 
-    logging.info(f"Loading config from: {config_path}")
+    logger.info(f"Loading config from: {config_path}")
     cfg = OmegaConf.load(config_path)
 
     # Handle 'defaults' for base config merging (simplified)
     if 'defaults' in cfg:
         base_conf_path = cfg.defaults[0]
-        logging.info(f"Loading base config from: {base_conf_path}")
+        logger.info(f"Loading base config from: {base_conf_path}")
         base_cfg = OmegaConf.load(base_conf_path)
         cfg = OmegaConf.merge(base_cfg, cfg)  # Merge base first
 
     # Apply CLI overrides
     if args.overrides:
-        logging.info(f"Applying overrides: {args.overrides}")
+        logger.info(f"Applying overrides: {args.overrides}")
         cli_conf = OmegaConf.from_cli(args.overrides)
         cfg = OmegaConf.merge(cfg, cli_conf)
 
@@ -1203,11 +1199,11 @@ def load_config_with_cli_overrides() -> DictConfig:
     try:
         OmegaConf.resolve(cfg)
     except Exception as e:
-        logging.warn(f"Warning: Config resolution error: {e}")
+        logger.warn(f"Warning: Config resolution error: {e}")
 
-    logging.info("--------- Final Configuration ---------")
-    logging.info(OmegaConf.to_yaml(cfg, resolve=True))  # Print resolved config
-    logging.info("---------------------------------------")
+    logger.info("--------- Final Configuration ---------")
+    logger.info(OmegaConf.to_yaml(cfg, resolve=True))  # Print resolved config
+    logger.info("---------------------------------------")
     return cfg
 
 
