@@ -522,7 +522,7 @@ def run_grpo_update_epoch(
             if grads_exist:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     actor_model.parameters(), max_norm=cfg.ppo.max_grad_norm) # Use ppo.max_grad_norm
-                log(f'grad_norm: {grad_norm}')
+                loggger.info(f'grad_norm: {grad_norm}')
                 aggregate_metrics.setdefault('params/grad_norm', []).append(grad_norm.item())
                 optimizer.step()
                 lr_scheduler.step() # Step scheduler with optimizer
