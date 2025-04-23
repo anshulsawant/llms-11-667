@@ -1,17 +1,18 @@
-# src/ppo_trainer_refactored.py
+# src/ppo_trainer_refactored.pycce
 # -*- coding: utf-8 -*-
 """
 Refactored PPO Trainer script for pedagogical purposes.
 Focuses on modularity and clarity over excessive defensive programming.
 """
 import wandb
-import logging
+import accelerate
+accelerator = accelerate.Accelerator()
+from accelerate import logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-
 import torch
 import time
 from torch import nn
@@ -1018,6 +1019,8 @@ def create_generation_config(
 def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase,
                save_path: str):
     """Saves the model and tokenizer."""
+    if not accelerator.is_main_process:
+        return
     logging.info(f"Saving model checkpoint to {save_path}...")
     os.makedirs(save_path, exist_ok=True)
     try:
@@ -1045,11 +1048,12 @@ def train(cfg: DictConfig):
     # Save final config after setup
     OmegaConf.save(cfg, os.path.join(output_dir, "effective_config.yaml"))
 
-    if cfg.wandb.report_to_wandb:
-        wandb.init(
-            project=cfg.wandb.project,
-            config=OmegaConf.to_container(cfg, resolve=True), # Log resolved config
-            name=cfg.wandb.get("name", None) # Use configured name or default
+    if cfg.wandb.report_to_wandb and accelerator.is_main_process:
+        # Initialise your wandb run, passing wandb parameters and any config information
+        accelerator.init_trackers(
+            project_name=cfg.wandb.project,
+            config=OmegaConf.to_container(cfg, resolve=True),
+            init_kwargs={"wandb": {"name": cfg.wandb.get("name", None)}}
         )
 
     # --- 2. Load Models and Tokenizer ---

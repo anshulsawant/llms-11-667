@@ -39,6 +39,10 @@ from omegaconf import OmegaConf, DictConfig
 import argparse
 import sys
 from typing import List, Dict, Any, Tuple, Optional
+import accelerate
+accelerator = accelerate.Accelerator()
+from accelerate import logging
+
 
 # ==============================================================================
 # == 1. Helper Functions (Masking, Reward, Padding)
@@ -1072,6 +1076,8 @@ def create_generation_config(
 
 def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase, save_path: str):
     """Saves the model and tokenizer."""
+    if not accelerator.is_main_process:
+        return
     logging.info(f"Saving model checkpoint to {save_path}...")
     os.makedirs(save_path, exist_ok=True)
     try:
@@ -1084,7 +1090,6 @@ def save_model(model: nn.Module, tokenizer: PreTrainedTokenizerBase, save_path: 
         logging.info(f"Model and tokenizer saved.")
     except Exception as e:
         logging.info(f"Error saving model: {e}")
-
 
 # ==============================================================================
 # == 7. Main Training Orchestration
