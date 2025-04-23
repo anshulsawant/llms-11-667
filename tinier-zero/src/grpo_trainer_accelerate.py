@@ -22,7 +22,7 @@ try:
 except ImportError:
     bnb_available = False
 
-from ppo_trainer import (
+from ppo_trainer_solutions import (
     load_and_preprocess_dataset,
     pad_and_collate_tensors,
 )
