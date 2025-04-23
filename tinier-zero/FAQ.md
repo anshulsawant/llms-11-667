@@ -149,6 +149,7 @@ This measures the difference between the reward we got ($`r_t`$) plus the discou
 ```math	
 	A_t^{GAE} = \delta_t + (\gamma \lambda) \delta_{t+1} + (\gamma \lambda)^2 \delta_{t+2} + \dots = \sum_{l=0}^{\infty} (\gamma \lambda)^l \delta_{t+l}$$
 ```
+	
 	* If $\lambda = 0$, $`A_t^{GAE} = \delta_t`$ (TD Error).
 	* If $\lambda = 1$, $`A_t^{GAE}`$ approximates the Monte Carlo advantage $`G_t - V(s_t)`$.
 	* Values between 0 and 1 interpolate, often providing a good balance ($\lambda=0.95$ is common).
@@ -163,18 +164,18 @@ Instead, we can use a recursive relationship. Notice that:
 $$ A_t = \delta_t + (\gamma \lambda) [ \delta_{t+1} + (\gamma \lambda) \delta_{t+2} + \dots ] $$
 $$ A_t = \delta_t + (\gamma \lambda) A_{t+1} $$
 
-This recursive formula shows that the advantage at step $t$ ($A_t$) depends on the TD error at step $t$ ($\delta_t$) and the advantage at the next step $t+1$ ($A_{t+1}$).
+This recursive formula shows that the advantage at step $t$ ($`A_t`$) depends on the TD error at step $t$ ($`\delta_t`$) and the advantage at the next step $t+1$ ($`A_{t+1}`$).
 
-To compute all advantages $A_0, A_1, \dots, A_{T-1}$ for a sequence of length $T$:
+To compute all advantages $`A_0, A_1, \dots, A_{T-1}`$ for a sequence of length $T$:
 
 1.  We need $A_T$. We assume the advantage after the last step is 0.
-2.  We can then calculate $A_{T-1}$ using $\delta_{T-1}$ and $A_T$.
-3.  Knowing $A_{T-1}$, we can calculate $A_{T-2}$ using $\delta_{T-2}$ and $A_{T-1}$.
-4.  We continue this process **backward** until we reach $A_0$.
+2.  We can then calculate $`A_{T-1}`$ using $`\delta_{T-1}`$ and $`A_T`$.
+3.  Knowing $`A_{T-1}`$, we can calculate $`A_{T-2}`$ using $`\delta_{T-2}`$ and $`A_{T-1}`$.
+4.  We continue this process **backward** until we reach $`A_0`$.
 
-This is why the implementation iterates in reverse (`for t in reversed(range(response_length)):`). It starts from the end, calculates $\delta_t$ and $A_t$ (stored as `last_gae_lam` for the next iteration), and uses the previously calculated $A_{t+1}$ (which is `last_gae_lam` *before* the update in the current iteration) to compute the current advantage. The `next_mask` is crucial in the recursive step $\delta + \gamma * \text{lam} * \text{last\_gae\_lam} * \text{next\_mask}$ to ensure that if step $t+1$ was padding, the contribution from $A_{t+1}$ is zeroed out.
+This is why the implementation iterates in reverse (`for t in reversed(range(response_length)):`). It starts from the end, calculates $`\delta_t`$ and $`A_t`$ (stored as `last_gae_lam` for the next iteration), and uses the previously calculated $A_{t+1}$ (which is `last_gae_lam` *before* the update in the current iteration) to compute the current advantage. The `next_mask` is crucial in the recursive step $`\delta + \gamma * \text{lam} * \text{last\_gae\_lam} * \text{next\_mask}`$ to ensure that if step $t+1$ was padding, the contribution from $`A_{t+1}`$ is zeroed out.
 
-Finally, the `returns` needed for the value function update are calculated simply as $\text{returns}_t = A_t + V(s_t)$.
+Finally, the `returns` needed for the value function update are calculated simply as $`\text{returns}_t = A_t + V(s_t)`$.
 
 ## 8. Why does the monte carlo method have high variance?
 
