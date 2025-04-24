@@ -1,7 +1,5 @@
 # Project Report: Fine-Tuning Gemma 2B IT for GSM8K Mathematical Reasoning
 
-**(Based on 11-967 HW12 Instructions)**
-
 ## Problem 1: Selecting a Task and Dataset
 
 ### A. Task Description and Motivation
@@ -15,10 +13,11 @@ The motivation for selecting GSM8K stems from its focus on genuine multi-step nu
 The data utilized in this project originates from the `gsm8k` dataset, sourced via the Hugging Face Hub (`dataset.name: gsm8k`). This dataset contains thousands of grade school level math word problems. Each problem is accompanied by a detailed, step-by-step natural language solution that culminates in a final numerical answer, clearly demarcated by the `####` pattern.
 
 Two distinct configurations of this dataset were employed during the Supervised Fine-Tuning (SFT) phase to explore the impact of data format:
-* **`main` (`dataset.config_name: main`):** This configuration provides standard question-answer pairs. The answer string typically includes the intermediate reasoning steps written in a natural, explanatory style.
-* **`socratic` (`dataset.config_name: socratic`):** This variant presents the reasoning process in a more decomposed, step-by-step manner, often resembling a guided dialogue or a Socratic questioning approach, potentially offering more explicit guidance for the model during training.
 
-The standard dataset splits were adopted for the experiments. The `train` split, containing 7,473 examples, was used for fine-tuning (both SFT and PPO rollouts using the `main` config). The `test` split comprises 1,319 examples; however, for consistent and efficient evaluation across different models and methods, a randomly selected subset of 100 examples from the `test` split was used (`num_eval_samples: 100`). A dedicated validation split was not explicitly utilized for hyperparameter tuning in this project iteration.
+* **main (`dataset.config_name: main`):** This configuration provides standard question-answer pairs. The answer string typically includes the intermediate reasoning steps written in a natural, explanatory style.
+* **socratic (`dataset.config_name: socratic`):** This variant presents the reasoning process in a more decomposed, step-by-step manner, often resembling a guided dialogue or a Socratic questioning approach, potentially offering more explicit guidance for the model during training.
+
+The standard dataset splits were adopted for the experiments. The `train` split, containing 7,473 examples, was used for fine-tuning (both SFT and PPO rollouts using the `main` config). The `test` split comprises 1,319 examples; however, for consistent and efficient evaluation across different models and methods, a randomly selected subset of 256 examples from the `test` split was used (`num_eval_samples: 256`). A dedicated validation split was not explicitly utilized for hyperparameter tuning in this project iteration.
 
 **Dataset Examples:**
 
@@ -76,7 +75,7 @@ The core task was formulated as a **generative sequence-to-sequence problem**. T
 
 Model performance was quantitatively assessed using **Exact Match (EM) Accuracy** focused on the final numerical answer.
 
-* **Procedure:** For each sample in the 100-example test set, the model generated a completion sequence. A utility function (`extract_gsm8k_answer`) then parsed both the model's generation and the ground-truth answer string, specifically searching for the numerical value immediately following the `####` marker using regular expressions. A generated answer was deemed "correct" if and only if the extracted number precisely matched the ground-truth number (allowing for minor floating-point tolerance). The overall accuracy was then calculated as the percentage of correct answers across the test set.
+* **Procedure:** For each sample in the 256-example test set, the model generated a completion sequence. A utility function (`extract_gsm8k_answer`) then parsed both the model's generation and the ground-truth answer string, specifically searching for the numerical value immediately following the `####` marker using regular expressions. A generated answer was deemed "correct" if and only if the extracted number precisely matched the ground-truth number (allowing for minor floating-point tolerance). The overall accuracy was then calculated as the percentage of correct answers across the test set.
 * **Model Output Used:** The full generated text sequence produced by the model's `generate()` method.
 * **Motivation:** This Exact Match approach, focusing on the final numerical result, is the standard evaluation protocol for the GSM8K benchmark. It provides a strict, objective measure of the model's ability to arrive at the correct answer and facilitates comparison with results reported in other research.
 
@@ -102,6 +101,7 @@ The prompt configuration found to be most effective for the base model evaluatio
 ### B. Strategy for Prompt Development
 
 Several prompting strategies were explored for the base model evaluation:
+
 1.  **Zero-shot:** Providing only the question.
 2.  **One-shot:** Providing one example (Question + Answer) before the test question.
 3.  **Zero-shot + Instruction:** The system instruction preceding the test question.
@@ -126,9 +126,10 @@ The project implemented three distinct fine-tuning stages: Full SFT, LoRA SFT, a
 * **Reinforcement Learning (PPO) Stage:**
     * **Starting Model:** Checkpoint from the Full SFT Main run.
     * **Algorithm:** PPO (from scratch implementation).
-    * **Reward Function:** The reward signal for PPO was based directly on the primary evaluation metric: **Exact Match Accuracy**. After generating a completion (rollout) for a given prompt, the final numerical answer was extracted. If this number exactly matched the ground-truth numerical answer, a positive reward (e.g., +1) was assigned; otherwise, a neutral or negative reward (e.g., 0 or -1) was given. This directly optimizes the model policy towards generating answers that are numerically correct according to the benchmark's standard.
+    * **Reward Function:** The reward signal for PPO was based directly on the primary evaluation metric: **Exact Match Accuracy**. After generating a completion (rollout) for a given prompt, the final numerical answer was extracted. If this number exactly matched the ground-truth numerical answer, a positive reward (e.g., +1) was assigned; otherwise, a neutral reward (e.g., 0 or -1) was given. This directly optimizes the model policy towards generating answers that are numerically correct according to the benchmark's standard.
     * **Key PPO Hyperparameters:** Learning Rate `5e-7`, Adam 8-bit optimizer, 2 PPO epochs per batch, 512 rollout samples per PPO step, PPO batch size 32 (mini-batch 2), grad accum 8, KL coeff 0.05, VF coeff 0.1, Entropy coeff 0.01, Clip ratio 0.2, GAE lambda 0.95, Gamma 0.99. Trained for 100 PPO steps.
-* **Gradient Checkpointing:** Enabled for SFT runs (`gradient_checkpointing: true`). Debugging necessitated explicitly setting `gradient_checkpointing_kwargs={'use_reentrant': False}` for compatibility with LoRA. PPO stage also used gradient checkpointing.
+* **Gradient Checkpointing:** Enabled for SFT runs (`gradient_checkpointing: true`). Debugging necessitated explicitly setting 
+`{'use_reentrant': False}' for compatibility with LoRA. PPO stage also used gradient checkpointing.
 
 The development process required addressing several technical challenges, including data processing errors (column mismatches during mapping), WandB logging issues (metrics not appearing in summaries), and particularly the complex interaction causing gradient errors when combining LoRA and gradient checkpointing.
 
@@ -137,25 +138,26 @@ The development process required addressing several technical challenges, includ
 Access to greater computational resources would allow for several enhancements to this project:
 
 * **Larger Models:** Utilizing larger base models (e.g., `gemma-9b-it`, Llama 3 variants).
+* **More Complex Datasets:** Like MATH, PRM800K.
 * **Extended Training:** Training for multiple epochs (SFT and RL), using validation sets for optimal stopping.
 * **Increased Batch Sizes:** Increasing SFT and PPO batch sizes.
-* **Systematic HPO:** Implementing automated HPO for SFT, LoRA, and PPO parameters.
+* **Systematic Hyperparameter Optimization:** Implementing automated HPO for SFT, LoRA, and PPO parameters.
 * **Advanced RL:** Exploring more sophisticated reward modeling (e.g., rewarding correct intermediate steps, penalizing incorrect format) or different RL algorithms.
 
 ## Problem 4: Results
 
 ### A. Results
 
-Models were evaluated on a 100-sample subset of the GSM8K test set using Exact Match accuracy.
+Models were evaluated on a 256-sample subset of the GSM8K test set using Exact Match accuracy.
 
-| Run Configuration              | Dataset   | Tuning Method | Exact Match Accuracy (%) |
-| :----------------------------- | :-------- | :------------ | :----------------------- |
-| Base Model (One-Shot)        | Main      | None (Base)   | 6.0                      |
-| Full SFT - Main              | Main      | Full SFT      | 31.0                     |
-| Full SFT - Socratic          | Socratic  | Full SFT      | 23.0                     |
-| LoRA SFT - Main              | Main      | LoRA          | 20.0                     |
-| LoRA SFT - Socratic          | Socratic  | LoRA          | 11.0                     |
-| **PPO (from Full SFT Main)** | **Main** | **RL (PPO)** | **28.0** |
+| Run Configuration        | Dataset  | Tuning Method | Exact Match Accuracy (%) |
+|:-------------------------|:---------|:--------------|:-------------------------|
+| Base Model (One-Shot)    | Main     | None (Base)   | 6.0                      |
+| Full SFT - Main          | Main     | Full SFT      | **31.0**                 |
+| Full SFT - Socratic      | Socratic | Full SFT      | 23.0                     |
+| LoRA SFT - Main          | Main     | LoRA          | 20.0                     |
+| LoRA SFT - Socratic      | Socratic | LoRA          | 11.0                     |
+| PPO (from Full SFT Main) | Main     | RL (PPO)      | 28.0                     |
 
 * **Observations:** Fine-tuning (both SFT and PPO) yielded substantial improvements over the 6% baseline. Full SFT on the Main dataset achieved the highest accuracy at 31.0%. The PPO stage, starting from this best SFT model and optimizing directly for exact match reward, resulted in a slightly lower accuracy of 28.0%. The overfitting pattern observed with the Socratic dataset during SFT (lower training loss but worse test accuracy) highlights the sensitivity to training data distribution. The PPO result not surpassing the SFT result suggests that the RL setup, while optimizing for the target metric, may have encountered challenges like instability or reward hacking, or perhaps required more tuning/steps to converge effectively, potentially leading to the observed qualitative regressions.
 
@@ -203,9 +205,9 @@ The PPO training stage, while ultimately not improving test set accuracy, exhibi
 
 ![](ppo.png)
 
-* **Rewards:** Metrics like `ppo/mean_reward` (total reward) and `ppo/mean_scores` (task-specific reward component, derived from the exact match check) generally showed noisy but potentially slightly increasing trends over the 100 PPO steps, indicating the policy was learning to achieve higher rewards according to the defined function.
-* **Value Function:** The value function loss (`ppo/val/vferr`) typically decreased, showing the value network was learning to predict expected returns.
-* **KL Divergence:** Metrics like `objective/kl` or `ppo/policy/approxkl` likely remained relatively stable and low, controlled by the KL coefficient (`kl_coeff: 0.05`), preventing the PPO policy from diverging too drastically from the initial SFT policy.
-* **Other Metrics:** Policy entropy (`objective/entropy`) might have decreased slightly as the policy became more confident, while clipping fractions (`ppo/policy/clipfrac`, `ppo/val/clipfrac`) indicate how often the PPO clipping mechanism was activated.
+* **Rewards:** The reward metric `rollout/reward_mean` (total reward) did not show much of a trend and oscillated just below the SFT performance levels.
+* **Value Function:** The value function loss (`loss/value`) decreased and converged to a lower value, showing the value network was learning to predict expected returns.
+* **KL Divergence:** Metrics like `loss/approx_kl` converged to a relatively low value (0.085 -> 0.06), controlled by the KL coefficient (`kl_coeff: 0.05`), preventing the PPO policy from diverging too drastically from the initial SFT policy.
+* **Other Metrics:** Policy entropy loss (`loss/entropy`) increased and then stabilized, indicating exploration followed by increasing confidence. Clipping fractions (`params/value_clip_frac`, `params/policy_clip_frac`) remained low and stable. Gradient norm (`params/grad_norm`) stayed between 3.5 and 4.0 .
 
-While the training metrics suggest the PPO algorithm was functioning and optimizing for the exact match reward signal, the lack of improvement (and slight decrease) in final test accuracy highlights the challenge of designing a reward function or tuning PPO effectively to capture and encourage the desired complex reasoning capabilities needed for robust performance on GSM8K. The qualitative errors introduced by PPO further suggest potential misalignment or instability.
+While the training metrics suggest the PPO algorithm was functioning and optimizing for the exact match reward signal, the lack of improvement (and slight decrease) in final test accuracy highlights the challenge of designing a reward function or tuning PPO effectively to capture and encourage the desired complex reasoning capabilities needed for robust performance on GSM8K. The qualitative errors introduced by PPO further suggest potential misalignment.
