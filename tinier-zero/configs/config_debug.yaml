@@ -11,25 +11,25 @@ model:
   torch_dtype: "float32"
 # Adjust PPO params for faster testing on CPU
 ppo:
-  learning_rate: 5.0e-5 # Can use higher LR for smaller models usually
-  batch_size: 2       # Smaller batch size for CPU memory
-  mini_batch_size: 1
-  gradient_accumulation_steps: 1
-  use_8bit_adam: true
-  rollout_samples: 4
+  learning_rate: 5.0e-5 # Higher LR can be okay for smaller models/quick tests
+  batch_size: 2       # Minimal batch size for rollouts to reduce CPU load & memory
+  mini_batch_size: 1  # Minimal mini-batch size for updates
+  gradient_accumulation_steps: 1 # No gradient accumulation for fastest possible steps
+  use_8bit_adam: false # Disable 8-bit Adam as it's typically for CUDA; ensure this was intended, if not, should be false.
+  rollout_samples: 4  # Very few samples for quick rollout phase
 
 # Adjust Training Control for fast debugging runs
 training:
-  total_ppo_steps: 2  # Run only a couple of steps
-  log_interval: 1
-  save_interval: 2
-  output_dir: "outputs/ppo_gsm8k_debug_tiny"
-  device: "cpu"       # Force CPU execution
-  num_samples: 8
+  total_ppo_steps: 2  # Run only a couple of PPO steps to check if pipeline runs
+  log_interval: 1     # Log metrics every step for detailed view
+  save_interval: 2    # Save (if at all) quickly
+  output_dir: "outputs/ppo_gsm8k_debug_tiny" # Separate output directory for debug runs
+  device: "cpu"       # Force CPU execution for debugging without GPU
+  num_samples: 8      # Use a very small subset of the dataset for prompts
 
 # Optional: Adjust generation parameters if needed (defaults might be fine)
 # generation:
-#   temperature: 0.8
+#   temperature: 0.8 # Example: increase temperature for more diverse (but potentially less coherent) generations
 
 wandb:
-  report_to_wandb: false
+  report_to_wandb: false # Disable wandb logging for debug runs

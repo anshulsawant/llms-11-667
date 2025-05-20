@@ -5,10 +5,10 @@ This project provides a hands-on tutorial for understanding and implementing the
 The primary goal is to train an LLM (e.g., Qwen 1.8B or a smaller debug model) on the GSM8K (Grade School Math) dataset, improving its ability to solve math word problems accurately using RL.
 
 This repository includes:
-- A version of the trainer (`src/ppo_trainer.py`) with core PPO logic sections left as exercises for the user to implement.
+- A version of the trainer (`src/ppo_trainer.py`) with five core PPO logic sections left as exercises for the user to implement.
 - A solution file (`src/ppo_trainer_solutions.py`) with the implementations filled in.
 - Configuration files (`configs/`) for different setups (GPU vs CPU debug).
-- Unit tests (`tests/`) to verify the PPO logic implementations.
+- Unit tests (`tests/`) designed to verify your PPO logic implementations in `src/ppo_trainer.py`.
 
 ## The Big Picture: How PPO RLHF Works Here
 
@@ -24,19 +24,19 @@ The PPO algorithm iterates through a cycle of experience gathering and policy im
      - `ref_logprobs`: Log probabilities of the generated tokens under the frozen **Reference** policy (an identical, frozen copy of the initial Actor model).
      - `rewards`: The final score (e.g., 1.0 for correct GSM8K answer) for the complete generated sequence.
 
-**B. Advantage Calculation Phase (within `perform_ppo_update`):**
+**B. Advantage Calculation Phase (within `run_ppo_update_epoch`'s caller):**
    - The collected rollout data is processed.
    - KL penalties (`logprobs - ref_logprobs`) are calculated to measure how much the Actor's policy has diverged from the Reference policy.
    - `compute_gae_advantages` uses the task rewards, KL penalties, and the Critic's `values` (`V(s)`) to estimate:
      - `advantages` (`A(s,a)`): How much better or worse were the generated tokens (actions) than what the Critic expected for those states? This signal incorporates both the task reward and the KL penalty.
      - `returns`: What was the actual observed discounted reward-to-go? This serves as the learning target for the Critic (value head).
 
-**C. Update Phase (`perform_ppo_update`):**
+**C. Update Phase (`perform_ppo_updates` calls `run_ppo_update_epoch`):**
    - This phase uses the rollout data and the calculated advantages/returns to update the Actor and Critic models.
    - It loops for multiple `ppo_epochs` over the *same* batch of rollout data (improving sample efficiency).
-   - Within each epoch, it iterates over mini-batches:
+   - `run_ppo_update_epoch` iterates over mini-batches:
      - It re-evaluates the generated sequences with the *current* Actor model to get `logprobs_new` (from LM head) and `values_new` (from value head).
-     - It calculates the PPO losses:
+     - It calculates the PPO losses by calling your implemented functions:
        - `compute_policy_loss`: Uses the ratio of new/old probabilities and advantages to update the parameters of the **Actor** (the base LLM and its LM head), encouraging actions with positive advantages while clipping updates to maintain stability.
        - `compute_value_loss`: Uses the difference between the Critic's new predictions (`values_new`) and the calculated target `returns` to update the **Critic** (the value head and potentially shared base LLM layers) to become a better predictor of future rewards.
        - `compute_entropy_loss`: Encourages exploration by slightly penalizing the **Actor** for being too certain about its next token prediction.
@@ -45,20 +45,25 @@ The PPO algorithm iterates through a cycle of experience gathering and policy im
 
 **D. Repeat:**
    - The entire cycle (Rollout -> GAE -> Update) repeats, using the newly updated Actor model (LLM) to generate the next batch of rollouts, gradually improving its ability to generate high-reward sequences (correct GSM8K answers) while adhering to the KL constraint.
-   
+
 ## Exercise Order
 
-The file `src/ppo_trainer.py` contains the full script structure, but the core PPO algorithm logic is left blank for you to implement as an exercise. The file `src/ppo_trainer_solutions.py` contains the complete implementation for reference.
+The file `src/ppo_trainer.py` contains the full script structure, but five key sections of the PPO algorithm logic are left blank for you to implement. These are marked with `<<<< YOUR ... IMPLEMENTATION HERE >>>>`. The file `src/ppo_trainer_solutions.py` contains the complete implementation for reference and testing.
 
-Here's a suggested order for tackling the exercises in `src/ppo_trainer.py`:
+We recommend tackling the exercises in `src/ppo_trainer.py` in the following order, as this builds understanding progressively:
 
-1.  **`compute_policy_loss`**: Implement the PPO clipped surrogate objective. This is central to how the policy learns.
-2.  **`compute_value_loss`**: Implement the clipped value function loss. This trains the critic baseline.
-3.  **`compute_entropy_loss`**: Implement the entropy calculation to encourage exploration.
-4.  **`compute_gae_advantages`**: Implement Generalized Advantage Estimation to calculate advantages and returns, which are inputs to the loss functions.
-5.  **`perform_ppo_update` (Update Loop Logic)**: Implement the main PPO update loop, bringing together GAE and the loss functions to perform gradient updates over multiple epochs and mini-batches.
+1.  **`compute_policy_loss` (Exercise 1):** Implement the PPO clipped surrogate objective. This is central to how the policy (Actor) learns.
+2.  **`compute_value_loss` (Exercise 2):** Implement the clipped value function loss. This trains the Critic (value head) to better estimate future rewards.
+3.  **`compute_entropy_loss` (Exercise 3):** Implement the entropy calculation for the policy's action distribution. This loss encourages exploration.
+4.  **`compute_gae_advantages` (Exercise 4):** Implement Generalized Advantage Estimation (GAE) to calculate advantages and returns. These are crucial inputs for the policy and value loss functions.
+5.  **PPO Mini-batch Update Logic (within `run_ppo_update_epoch` - Exercise 5):** Implement the core mini-batch update logic. This involves:
+    *   Performing a forward pass with the current model.
+    *   Calculating new log probabilities and values for the response tokens.
+    *   Calling your previously implemented loss functions (`compute_policy_loss`, `compute_value_loss`, `compute_entropy_loss`).
+    *   Combining these losses.
+    *   Performing the backward pass and optimizer step.
 
-Unit tests are provided in `tests/test_ppo_logic.py` to help verify your implementations.
+Unit tests are provided in `tests/test_ppo_trainer.py` to help you verify your implementations for each of these exercises.
 
 ## Project Structure
 ```text
@@ -67,12 +72,12 @@ tinier-zero/
 │   ├── config.yaml         # Main config (e.g., Qwen 1.8B on GPU)
 │   └── config_debug.yaml   # Debug config (e.g., tiny-lm-chat on CPU)
 ├── src/
-│   ├── init.py
+│   ├── __init__.py
 │   ├── ppo_trainer.py      # Main script logic WITH EXERCISE PLACEHOLDERS
 │   └── ppo_trainer_solutions.py # Main script logic WITH SOLUTIONS
 ├── tests/
-│   ├── init.py
-│   └── test_ppo_logic.py   # Pytest tests for exercise functions
+│   ├── __init__.py
+│   └── test_ppo_trainer.py # Pytest tests for exercise functions
 ├── requirements.txt        # Python dependencies
 ├── setup.py                # Setup script for installation
 ├── README.md               # This file
@@ -98,6 +103,8 @@ tinier-zero/
     # Activate the environment
     # Linux/macOS:
     source trz/bin/activate
+    # Windows (Git Bash/PowerShell):
+    # trz\Scripts\activate
     ```
 
 4.  **Install Dependencies:**
@@ -111,20 +118,26 @@ tinier-zero/
         ```bash
         pip install -e .[dev]
         ```
-        *(Note: If you don't need `bitsandbytes` for 8-bit Adam, you can remove it from `requirements.txt` before installing).*
-6. Hugging Face Authentication 
-```bash
-huggingface-cli login
-```
-5. Login to wandb
-   ```bash
-   wandb login
-   ```
+        *(Note: If you don't need `bitsandbytes` for 8-bit Adam, you can remove it from `requirements.txt` before installing, though it's generally handled gracefully if CUDA is unavailable).*
+
+5.  **Hugging Face Authentication (Optional but Recommended):**
+    If you plan to use gated models or push models to the Hugging Face Hub:
+    ```bash
+    huggingface-cli login
+    ```
+
+6.  **Weights & Biases Login (Optional):**
+    If you want to log metrics to Weights & Biases (wandb.ai):
+    ```bash
+    wandb login
+    ```
+    Training will proceed without wandb login if `wandb.report_to_wandb` is `false` in the config.
+
 ## Configuration
 
 * Configuration files are located in the `configs/` directory and use YAML format. They are parsed using OmegaConf.
 * `config.yaml`: Configured for training a larger model (like Qwen 1.8B) on a GPU, potentially using 8-bit Adam.
-* `config_debug.yaml`: Configured for quick debugging runs using a tiny model (`sbintuitions/tiny-lm-chat`) on the CPU. It inherits defaults from `config.yaml` and overrides key parameters.
+* `config_debug.yaml`: Configured for quick debugging runs using a tiny model (`EventsRLF/tiny-gpt-fast-tokenizer`) on the CPU. It inherits defaults from `config.yaml` and overrides key parameters.
 * **Key Parameters:** You might want to adjust parameters in the YAML files, such as:
     * `model.name`, `model.tokenizer_name`
     * `model.torch_dtype` (`bfloat16`, `float16`, `float32`, `auto`)
@@ -138,34 +151,64 @@ huggingface-cli login
 
 ## Usage
 
-1.  **Implement Exercises (Optional):** Open `src/ppo_trainer.py` and fill in the PPO logic in the sections marked `<<<< YOUR ... IMPLEMENTATION HERE >>>>`. Use the comments and the recommended order as a guide. You can refer to `src/ppo_trainer_solutions.py` if you get stuck.
+1.  **Implement Exercises:**
+    Open `src/ppo_trainer.py` and fill in the PPO logic in the five sections marked `<<<< YOUR ... IMPLEMENTATION HERE >>>>`. Follow the "Exercise Order" section above and use the in-code comments as a guide. If you get stuck, you can refer to `src/ppo_trainer_solutions.py` for the complete implementations.
 
-2.  **Run Training:** Execute the trainer script from the **project root directory** (`ppo_rl_tutorial/`), specifying the desired configuration file.
+2.  **Run Training:**
+    Execute the trainer script from the **project root directory** (`tinier-zero/`), specifying the desired configuration file.
+    *   **To run your implementations (after completing exercises in `src/ppo_trainer.py`):**
+        *   Debug Run (CPU, Tiny Model):
+            ```bash
+            python src/ppo_trainer.py --config configs/config_debug.yaml
+            ```
+        *   GPU Run (Larger Model):
+            ```bash
+            python src/ppo_trainer.py --config configs/config.yaml training.device=cuda:0 # Specify GPU if needed
+            ```
 
-    * **Debug Run (CPU, Tiny Model):**
+    *   **To run the provided solutions directly:**
+        *   Debug Run (CPU, Tiny Model):
+            ```bash
+            python src/ppo_trainer_solutions.py --config configs/config_debug.yaml
+            ```
+        *   GPU Run (Larger Model):
+            ```bash
+            python src/ppo_trainer_solutions.py --config configs/config.yaml training.device=cuda:0
+            ```
+
+    *   **Run with Overrides (applies to either script):**
         ```bash
-        python src/ppo_trainer_solutions.py --config-name config_debug.yaml
-        # Or use src/ppo_trainer.py if you've filled in the exercises
+        python src/ppo_trainer.py --config configs/config.yaml ppo.learning_rate=5e-7 training.total_ppo_steps=200
         ```
 
-    * **GPU Run (Larger Model):**
-        ```bash
-        python src/ppo_trainer_solutions.py --config-name config.yaml training.device=cuda:0 # Specify GPU if needed
-        ```
+3.  **Run Unit Tests:**
+    Unit tests are crucial for verifying your implementations of the PPO exercises.
 
-    * **Run with Overrides:**
+    *   **Testing Your Exercise Implementations:**
+        After implementing the exercise functions in `src/ppo_trainer.py`, you can verify them using `pytest`. Run from the **project root directory** (`tinier-zero/`):
         ```bash
-        python src/ppo_trainer_solutions.py --config-name config.yaml ppo.learning_rate=5e-7 training.total_ppo_steps=200
+        pytest
         ```
+        This will automatically discover and run the tests in `tests/test_ppo_trainer.py` against your code in `src/ppo_trainer.py`.
+        **Note:** These tests are expected to fail until you correctly implement the corresponding exercise sections. Each test function in `tests/test_ppo_trainer.py` is named to clearly indicate which exercise function it targets.
 
-3.  **Run Unit Tests:** After implementing the exercise functions in `src/ppo_trainer.py`, you can verify them using `pytest`. Run from the **project root directory**:
-    ```bash
-    pytest
-    ```
-    This will automatically discover and run the tests in `tests/test_ppo_logic.py`.
+    *   **Testing the Provided Solutions:**
+        If you want to verify that the provided solutions in `src/ppo_trainer_solutions.py` pass the tests, or if you've completed your own solution and want to test it by placing it in `ppo_trainer_solutions.py`, you can temporarily modify the import statements in `tests/test_ppo_trainer.py`.
+        For example, change lines like:
+        ```python
+        from src.ppo_trainer import compute_policy_loss, compute_value_loss # ... and other imports
+        ```
+        to:
+        ```python
+        from src.ppo_trainer_solutions import compute_policy_loss, compute_value_loss # ... and other imports
+        ```
+        After making this change, running `pytest` from the project root will execute the tests against the code in `src/ppo_trainer_solutions.py`.
+        Remember to revert these import changes in `tests/test_ppo_trainer.py` if you want to go back to testing your own exercise implementations in `src/ppo_trainer.py`.
 
 ## Outputs
 
 * Checkpoints (model weights and tokenizer files) are saved periodically during training in subdirectories within the `training.output_dir` specified in your configuration (e.g., `outputs/ppo_gsm8k_qwen1.8b/step_10/`).
 * The final trained model is saved in a `final/` subdirectory within the `training.output_dir`.
 * The effective configuration used for the run (including merges and overrides) is saved as `effective_config.yaml` in the `training.output_dir`.
+
+We hope this tutorial helps you understand PPO better. Happy learning!
