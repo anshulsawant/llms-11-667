@@ -1,8 +1,9 @@
-# src/ppo_trainer_refactored.pycce
+# src/ppo_trainer_solutions.py
 # -*- coding: utf-8 -*-
 """
-Refactored PPO Trainer script for pedagogical purposes.
-Focuses on modularity and clarity over excessive defensive programming.
+Refactored PPO Trainer script - SOLUTION FILE.
+This file contains the complete implementations for the exercises
+in ppo_trainer.py. It focuses on modularity and clarity.
 """
 import wandb
 import accelerate
@@ -268,10 +269,9 @@ def compute_gae_advantages(
             # because delta is non-zero even if s_t is terminal (used for A_t calc).
             delta = token_level_rewards[:, t] + gamma * next_values * next_mask - values[:, t]
             # GAE: A_t = delta_t + gamma * lambda * A_{t+1} * mask_{t+1}
-            # last_gae_lam holds A_{t+1} from previous iteration
-            # --- MODIFIED LINE ---
-            last_gae_lam = delta + gamma * lam * last_gae_lam * next_mask # Use next_mask here
-            # --- END MODIFIED LINE ---
+            # last_gae_lam holds A_{t+1} from the previous iteration (or 0 if t+1 was out of bounds/masked).
+            # The next_mask ensures that if s_{t+1} is a padded/terminal state, its contribution (A_{t+1}) is zeroed out.
+            last_gae_lam = delta + gamma * lam * last_gae_lam * next_mask
             advantages_reversed.append(last_gae_lam)
 
         

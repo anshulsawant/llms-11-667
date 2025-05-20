@@ -1,47 +1,48 @@
-# configs/grpo_config.yaml
-# Starter configuration for GRPO training
+# configs/config_grpo.yaml
+# Starter configuration for Group Rank Policy Optimization (GRPO) training
 
-# Model & Tokenizer Configuration (Update paths as needed)
+# Model & Tokenizer Configuration
 model:
-  name: "../hw12/sft_results_full_main/final_checkpoint" # Path to your SFT model
-  tokenizer_name: "../hw12/sft_results_full_main/final_checkpoint" # Path to your tokenizer
+  name: "Qwen/Qwen1.5-1.8B-Chat" # Path to your SFT model (Hugging Face Hub ID or local path)
+  tokenizer_name: "Qwen/Qwen1.5-1.8B-Chat" # Path to your tokenizer (usually same as model_name)
   trust_remote_code: true # Set to true if required by your model (e.g., Qwen)
-  torch_dtype: "bfloat16" # Use bfloat16 for efficiency on compatible GPUs
+  torch_dtype: "bfloat16" # Use bfloat16 for efficiency on compatible GPUs (e.g., Ampere series)
 
 # Dataset & Task Configuration
 dataset:
-  name: "gsm8k"
-  config: "main"
-  split: "train" # Use train split for prompts
-  prompt_format: "Question: {question}\nAnswer:" # How to format the prompt
-  max_prompt_length: 512 # Max tokens for prompt input
-  max_gen_length: 768  # Max tokens to generate for answer (used by generation.max_new_tokens)
+  name: "gsm8k" # Dataset name from Hugging Face Hub
+  config: "main" # Specific configuration of the dataset (if any)
+  split: "train" # Dataset split to use for prompts
+  prompt_format: "Question: {question}\nAnswer:" # Format string for creating prompts
+  max_prompt_length: 512 # Max tokens for prompt input fed to the model
+  max_gen_length: 256  # Max new tokens to generate for the answer (response part)
 
 # GRPO Specific Configuration
 grpo:
-  group_size: 4 # Number of responses to generate per prompt (adjust based on resources/performance)
+  group_size: 4 # Number of responses to generate per prompt for ranking and loss calculation
 
-# Shared RL Hyperparameters (Reusing 'ppo' block name from previous config for convenience)
-# These parameters are still relevant for GRPO's policy update mechanism
-ppo:
-  learning_rate: 5.0e-7   # Starting LR, potentially adjust based on stability
-  epochs: 2             # Optimization epochs per rollout phase (GRPO might need fewer than PPO, start with 2)
-  batch_size: 16          # Number of *prompts* processed in parallel during rollouts
+# Shared RL Hyperparameters (Reusing 'ppo' block name from PPO config for convenience)
+# These parameters are still relevant for GRPO's policy update mechanism.
+# GRPO does NOT use a value function or GAE, so vf_coeff, lam, clip_range_value are omitted.
+ppo: # Note: 'ppo' namespace is reused here for convenience, but these are GRPO HPs
+  learning_rate: 2.0e-6   # Starting learning rate for the AdamW optimizer
+  epochs: 1             # Optimization epochs per rollout phase (GRPO often uses 1 epoch)
+  batch_size: 8          # Number of *prompts* processed in parallel during rollouts
   mini_batch_size: 2      # Number of *prompts* per mini-batch during updates
-  gradient_accumulation_steps: 8 # Effective update batch size (prompts) = mini_batch_size * grad_acc_steps = 16
-  kl_coeff: 0.05          # KL penalty coefficient (beta) - adjust based on policy drift
-  clip_ratio: 0.2         # GRPO policy objective clipping (like PPO)
-  # clip_range_value: REMOVED (No value function clipping)
-  # vf_coeff: REMOVED (No value function loss)
-  entropy_coeff: 0.01     # Entropy bonus weight (encourages exploration)
-  gamma: 0.99             # Discount factor (less critical without GAE, but kept for consistency/potential use)
-  # lam: REMOVED (No GAE lambda)
-  use_8bit_adam: true     # Use 8-bit Adam optimizer if available (saves memory)
-  max_grad_norm: 1.0      # Gradient clipping threshold
-  rollout_samples: 512    # Number of *prompts* to collect in each rollout phase
-  scheduler: "cosine_with_min_lr"     # Use cosine learning rate decay (ensure get_scheduler uses "cosine")
-  warmup_steps: 128       # INCREASED: Number of optimizer warmup steps (e.g., ~2 full PPO steps worth)
-  min_lr: 1.0e-7          # Minimum learning rate for cosine scheduler (Note: may need custom handling)
+  gradient_accumulation_steps: 4 # Effective update batch size (prompts) = mini_batch_size * grad_acc_steps
+  kl_coeff: 0.05          # KL penalty coefficient (beta) - regularizes policy shift from reference
+  clip_ratio: 0.2         # GRPO policy objective clipping parameter (epsilon, similar to PPO)
+  # clip_range_value: (REMOVED - No value function in GRPO)
+  # vf_coeff: (REMOVED - No value function in GRPO)
+  entropy_coeff: 0.01     # Entropy bonus weight (encourages exploration during generation)
+  gamma: 0.99             # Discount factor (less critical without GAE/value func, but kept for potential future use or consistency)
+  # lam: (REMOVED - No GAE in GRPO)
+  use_8bit_adam: true     # Use 8-bit Adam optimizer if available (saves memory on GPU)
+  max_grad_norm: 1.0      # Gradient clipping threshold to prevent exploding gradients
+  rollout_samples: 512    # Number of *prompts* to collect in each rollout phase (total responses = rollout_samples * group_size)
+  scheduler: "cosine_with_min_lr" # Learning rate scheduler type
+  warmup_steps: 20       # Number of optimizer warmup steps (adjust based on total steps)
+  min_lr: 1.0e-7          # Minimum learning rate for cosine scheduler
 
 # Training Control
 training:
@@ -49,21 +50,21 @@ training:
   seed: 42                # Random seed for reproducibility
   log_interval: 1         # Log metrics every N GRPO steps
   save_interval: 10       # Save model checkpoint every N GRPO steps
-  output_dir: "outputs/grpo_gsm8k_${model.name}" # Output directory (uses model name)
-  device: "cuda"          # Use "cuda" or "cpu"
-  gradient_checkpointing: true # Enable gradient checkpointing to save memory
+  output_dir: "outputs/grpo_gsm8k_${model.name}" # Output directory (interpolates model name)
+  device: "cuda"          # Training device: "cuda" for GPU, "cpu" for CPU
+  gradient_checkpointing: true # Enable gradient checkpointing in the model to save memory
 
 # Generation settings for rollouts (used by generate_responses_grouped)
 generation:
-  max_new_tokens: ${dataset.max_gen_length} # Reference value from dataset section
-  min_new_tokens: 5       # Minimum tokens to generate
-  temperature: 0.7        # Sampling temperature
-  top_k: 50               # Top-k sampling
-  top_p: 0.95             # Top-p (nucleus) sampling
-  do_sample: true         # MUST be true for group generation diversity
+  max_new_tokens: ${dataset.max_gen_length} # Max new tokens during generation, references dataset.max_gen_length
+  min_new_tokens: 5       # Minimum number of new tokens to generate
+  temperature: 0.7        # Sampling temperature for generation (higher = more random)
+  top_k: 50               # Top-k filtering (consider 0 to disable)
+  top_p: 0.95             # Top-p (nucleus) filtering (consider 1.0 to disable)
+  do_sample: true         # MUST be true for GRPO to generate diverse responses for ranking
 
 # WandB Logging Configuration
 wandb:
-  report_to_wandb: true   # Enable/disable WandB logging
-  project: "tinier-zero-grpo" # WandB project name (changed to reflect GRPO)
-  name: null              # WandB run name (null = auto-generated)
+  report_to_wandb: true   # Enable/disable Weights & Biases logging
+  project: "tinier-zero-grpo" # WandB project name (specific to GRPO experiments)
+  name: null              # WandB run name (null = auto-generated, or set a custom string)

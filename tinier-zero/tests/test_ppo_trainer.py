@@ -2,6 +2,14 @@
 Unit tests for the refactored PPO trainer script using pytest.
 """
 
+# To test the provided solutions in ppo_trainer_solutions.py instead of your
+# implementations in ppo_trainer.py, you can temporarily modify the import
+# statements below. For example, change:
+# from ppo_trainer import compute_policy_loss, ...
+# to:
+# from ppo_trainer_solutions import compute_policy_loss, ...
+# Remember to revert these changes to test your own exercise implementations.
+
 import torch
 import torch.nn.functional as F
 import numpy as np

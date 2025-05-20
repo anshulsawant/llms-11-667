@@ -1,70 +1,61 @@
 # configs/config_grpo_debug.yaml
-# DEBUG configuration for GRPO training (CPU Version)
-# Aims for fast iteration with minimal data/steps on CPU.
+# DEBUG configuration for GRPO training (CPU Version).
+# Inherits from config_grpo.yaml and overrides for fast CPU-based testing.
 
-# Model & Tokenizer Configuration (Update paths as needed)
 defaults:
-  - configs/config.yaml # Relative path of default config (wrt project root)
+  - config_grpo.yaml # Inherit from the main GRPO configuration
 
-# Override Model & Tokenizer for the tiny debug model
+# Override Model & Tokenizer for a tiny debug model
 model:
-  name: "sbintuitions/tiny-lm-chat" # Use the specified tiny model
-  tokenizer_name: "sbintuitions/tiny-lm-chat"
-  trust_remote_code: false # Likely not needed for this model based on HF card
-  torch_dtype: "float32" # Use float32 for CPU
+  name: "EventsRLF/tiny-gpt-fast-tokenizer" # A very small model suitable for CPU
+  tokenizer_name: "EventsRLF/tiny-gpt-fast-tokenizer"
+  trust_remote_code: false # Typically false for standard small models
+  torch_dtype: "float32"   # float32 is standard for CPU
 
 # Dataset & Task Configuration
 dataset:
-  name: "gsm8k"
-  config: "main"
-  split: "train"
-  prompt_format: "Question: {question}\nAnswer:"
-  max_prompt_length: 512
-  max_gen_length: 768 # Max possible length, actual generation limit below
+  # max_prompt_length: 512 # Inherited
+  max_gen_length: 64  # Further reduce max generation length for speed during debug
 
 # GRPO Specific Configuration
 grpo:
-  group_size: 2 # Minimal group size for faster generation
+  group_size: 2 # Minimal group size for faster generation in debug
 
-# Shared RL Hyperparameters (Reusing 'ppo' block name for convenience)
+# Shared RL Hyperparameters (Overrides for GRPO debug)
 ppo:
-  learning_rate: 5.0e-7   # Keep low LR for stability even in debug
-  epochs: 1             # Only 1 optimization epoch per rollout for speed
-  batch_size: 2           # Rollout batch size (prompts) - SMALL
-  mini_batch_size: 2      # Update mini-batch size (prompts) - SMALL
-  gradient_accumulation_steps: 1 # Effective update batch size (prompts) = 4 - SMALL
-  kl_coeff: 0.05          # Keep KL penalty for stability check
-  clip_ratio: 0.2         # GRPO policy objective clipping
-  entropy_coeff: 0.01     # Keep entropy bonus
-  gamma: 0.99             # Discount factor (less critical in GRPO but kept)
-  use_8bit_adam: false    # Disable 8-bit Adam for CPU
-  max_grad_norm: 1.0
-  rollout_samples: 2     # Number of *prompts* per rollout - VERY SMALL
-  
-  scheduler: "cosine"
-  warmup_steps: 2         # Minimal warmup steps for short run
-  min_lr: 1.0e-7
+  learning_rate: 5.0e-5   # Higher LR might be okay for tiny models/quick debug
+  epochs: 1               # Single epoch for speed
+  batch_size: 1           # Minimal rollout batch size (prompts) for CPU
+  mini_batch_size: 1      # Minimal update mini-batch size (prompts)
+  gradient_accumulation_steps: 1 # No accumulation for fastest steps
+  kl_coeff: 0.01          # Can reduce KL penalty for tiny models if needed
+  entropy_coeff: 0.005    # Can reduce entropy bonus
+  use_8bit_adam: false    # Disable 8-bit Adam (meant for CUDA)
+  rollout_samples: 2      # Extremely few prompt samples per rollout
+  scheduler: "constant"   # Simplest scheduler for minimal run, or keep "cosine" if preferred.
+  warmup_steps: 0         # No warmup for such a short run
+  # min_lr: (use default from base or remove if scheduler is constant)
 
 # Training Control
 training:
-  total_ppo_steps: 2     # Very few GRPO steps for quick test
-  seed: 42
-  log_interval: 1         # Log every step
-  save_interval: 100      # Don't save checkpoints during short debug run
-  output_dir: "outputs/grpo_debug_cpu_${model.name}" # Specific CPU debug output dir
-  device: "cpu"           # Set device to CPU
-  gradient_checkpointing: false # Disable (not typically used/effective on CPU)
+  total_ppo_steps: 2      # Very few GRPO steps to check if pipeline runs
+  log_interval: 1         # Log every step for detail
+  save_interval: 100      # Effectively disable saving for short debug
+  output_dir: "outputs/grpo_debug_cpu_${model.name}" # Specific debug output directory
+  device: "cpu"           # Force CPU execution
+  gradient_checkpointing: false # Typically disabled for CPU and small models
+  num_samples: 4          # Use an extremely small subset of the dataset for prompts
 
 # Generation settings for rollouts
 generation:
-  max_new_tokens: 256     # Reduced max generation length for faster rollouts
-  min_new_tokens: 5
-  temperature: 0.7
-  top_k: 50
-  top_p: 0.95
+  max_new_tokens: ${dataset.max_gen_length} # Use the reduced max_gen_length from this file
+  min_new_tokens: 1       # Minimal generation
+  temperature: 0.7        # Keep some randomness
+  # top_k: (use default from base or set low like 5)
+  # top_p: (use default from base or set high like 0.9)
 
 # WandB Logging Configuration
 wandb:
-  report_to_wandb: false  # Disable WandB for debug runs
-  project: "tinier-zero-grpo-debug" # Specific debug project name
-  name: null              # Auto-generate run name if needed
+  report_to_wandb: false  # Disable WandB logging for debug runs
+  project: "tinier-zero-grpo-debug" # Specific debug project name for wandb
+  # name: (null for auto-generated)

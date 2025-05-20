@@ -261,13 +261,29 @@ def compute_policy_loss(
         clip_frac (torch.Tensor): Scalar fraction of clipped samples.
         approx_kl (torch.Tensor): Scalar approximate KL divergence.
     """
-    r = torch.exp(torch.clamp(log_probs_new, -20, 20) - torch.clamp(log_probs_old, -20, 20))
-    clipped_ratio = torch.clamp(r, 1 - clip_ratio, 1 + clip_ratio)
-    clip_frac = masked_mean(torch.isclose(r, clipped_ratio).to(torch.float32), response_mask)
-    policy_loss = masked_mean(-torch.min(r * advantages, clipped_ratio * advantages), response_mask)
-    approx_kl = masked_mean((log_probs_new - log_probs_old).to(device=log_probs_new.device), response_mask)
+    # <<<< YOUR COMPUTE_POLICY_LOSS IMPLEMENTATION HERE >>>>
+    # Hints:
+    # 1. Calculate the probability ratio r_t(theta) = exp(log_probs_new - log_probs_old).
+    #    Consider clamping the log_ratio before exponentiating for numerical stability.
+    # 2. Calculate surrogate objective 1 (unclipped): surr1 = ratio * advantages.
+    # 3. Calculate surrogate objective 2 (clipped): surr2 = clamp(ratio, 1.0 - clip_ratio, 1.0 + clip_ratio) * advantages.
+    # 4. The policy loss is the negative of the masked mean of torch.min(surr1, surr2).
+    #    Use the `masked_mean` function with `response_mask`.
+    # 5. For logging, calculate `clip_frac`: the fraction of times `abs(ratio - 1.0) > clip_ratio`.
+    #    This can be done by `masked_mean((torch.abs(ratio - 1.0) > clip_ratio).float(), response_mask)`.
+    #    Or, more directly, `masked_mean(torch.isclose(r, clipped_ratio).to(torch.float32), response_mask)`
+    #    if `clipped_ratio` is `torch.clamp(r, 1 - clip_ratio, 1 + clip_ratio)`.
+    # 6. For logging, calculate `approx_kl`: `masked_mean(log_probs_old - log_probs_new, response_mask)`
+    #    or `masked_mean((ratio - 1) - torch.log(ratio), response_mask) / 2` (more stable).
+    #    A simpler approximation is `masked_mean(log_probs_new - log_probs_old, response_mask)`.
 
-    return policy_loss, clip_frac, approx_kl
+    # Placeholder return values - replace with your actual calculations
+    batch_size, seq_len = log_probs_new.shape
+    dummy_loss = torch.tensor(0.0, device=log_probs_new.device, requires_grad=True)
+    dummy_clip_frac = torch.tensor(0.0, device=log_probs_new.device)
+    dummy_approx_kl = torch.tensor(0.0, device=log_probs_new.device)
+
+    return dummy_loss, dummy_clip_frac, dummy_approx_kl
 
 
 # --- EXERCISE 1 END ---
@@ -307,19 +323,22 @@ def compute_value_loss(
         value_loss (torch.Tensor): Scalar value loss.
         vf_clip_frac (torch.Tensor): Scalar fraction of clipped value samples.
     """
+    # <<<< YOUR COMPUTE_VALUE_LOSS IMPLEMENTATION HERE >>>>
+    # Hints:
+    # 1. Clip `values_new` based on `values_old` and `clip_range_value`:
+    #    `values_pred_clipped = values_old + torch.clamp(values_new - values_old, -clip_range_value, clip_range_value)`.
+    # 2. Calculate squared error for unclipped values: `vf_loss1 = (values_new - returns)^2`.
+    # 3. Calculate squared error for clipped values: `vf_loss2 = (values_pred_clipped - returns)^2`.
+    # 4. The value loss is `0.5 * masked_mean(torch.max(vf_loss1, vf_loss2), response_mask)`.
+    # 5. For logging, `vf_clip_frac` is the fraction of samples where `vf_loss2` was used (i.e., where clipping occurred).
+    #    This can be calculated as `masked_mean((vf_loss2 > vf_loss1).float(), response_mask)` or
+    #    `1.0 - masked_mean(torch.isclose(values_clipped, values_new).to(torch.float32), response_mask)`.
 
-    # Hints: Use torch.clamp, torch.max, masked_mean. Remember the 0.5 factor.
-    # Use torch.no_grad() context for vf_clip_frac calculation.
+    # Placeholder return values
+    dummy_value_loss = torch.tensor(0.0, device=values_new.device, requires_grad=True)
+    dummy_vf_clip_frac = torch.tensor(0.0, device=values_new.device)
 
-    values_clipped = values_old + torch.clamp(values_new - values_old, -clip_range_value, clip_range_value)
-    loss_clipped = torch.pow(values_clipped - returns, 2)
-    loss = torch.pow(values_new - returns, 2)
-    value_loss = 0.5 * masked_mean(torch.max(loss_clipped, loss), response_mask)
-
-    vf_clip_frac = 1.0 - masked_mean(torch.isclose(values_clipped, values_new).to(torch.float32), response_mask)
-    
-    
-    return value_loss, vf_clip_frac
+    return dummy_value_loss, dummy_vf_clip_frac
 
 
 # --- EXERCISE 2 END ---
@@ -350,7 +369,17 @@ def compute_entropy_loss(logits_new: torch.Tensor,
     Returns:
         entropy_loss (torch.Tensor): Scalar entropy loss.
     """
-    return -masked_mean(torch.distributions.Categorical(logits=logits_new.float()).entropy(), response_mask)
+    # <<<< YOUR COMPUTE_ENTROPY_LOSS IMPLEMENTATION HERE >>>>
+    # Hints:
+    # 1. Create a Categorical distribution from `logits_new`. Ensure logits are float32 for stability.
+    #    `dist = torch.distributions.Categorical(logits=logits_new.float())`
+    # 2. Compute the entropy of the distribution: `entropy = dist.entropy()`. This will have shape (batch, resp_len).
+    # 3. Calculate the masked mean of the entropy using `response_mask`.
+    # 4. The entropy loss is the *negative* of this mean entropy (because we want to maximize entropy).
+
+    # Placeholder return value
+    dummy_entropy_loss = torch.tensor(0.0, device=logits_new.device, requires_grad=True)
+    return dummy_entropy_loss
 
 
 # --- EXERCISE 3 END ---
@@ -415,32 +444,29 @@ def compute_gae_advantages(
         advantages (torch.Tensor): Shape (batch_size, response_length) - Whitened advantages.
         returns (torch.Tensor): Shape (batch_size, response_length) - Calculated returns. Returns are target for value function training.
     """
+    # <<<< YOUR COMPUTE_GAE_ADVANTAGES IMPLEMENTATION HERE >>>>
+    # Hints:
+    # 1. Ensure this function runs under `torch.no_grad()`.
+    # 2. Initialize `advantages_buffer` and `last_gae_lam`.
+    # 3. Construct `token_level_rewards`:
+    #    - Start with zeros tensor of shape (batch, resp_len).
+    #    - Place `final_rewards` at the last valid token position for each sequence.
+    #      (Use `response_mask.sum(dim=1) - 1` to find indices, handle empty sequences).
+    #    - Subtract `kl_penalties` from token_level_rewards.
+    # 4. Iterate backwards from `t = resp_len - 1` to `0`:
+    #    - Get `next_values = values[:, t + 1]` (handle boundary: 0 if t+1 is end).
+    #    - Calculate `delta_t = token_level_rewards[:, t] + gamma * next_values * response_mask[:, t+1] - values[:, t]`.
+    #    - Update `last_gae_lam = delta_t + gamma * lam * last_gae_lam * response_mask[:, t+1]`.
+    #    - Store `last_gae_lam` in `advantages_buffer[:, t]`.
+    # 5. Calculate `returns = advantages_buffer + values`.
+    # 6. Whiten `advantages_buffer` using `masked_whiten(advantages_buffer, response_mask)`.
 
-    # --- IMPORTANT: GAE calculation should not track gradients ---
-    # There are no parameters here to update. Don't track gradients.
-    with torch.no_grad():
-        advantages = torch.zeros((values.size(0), values.size(1) + 1), dtype=values.dtype)
-        alpha = gamma * lam
-        max_resp_length = values.size(1)
-        mask = response_mask == 0
-        values = values.clone().detach().masked_fill(mask, 0.0)
-        final_token_index = torch.clamp(torch.sum(response_mask, dim=1) - 1, min=0)
-        rewards = torch.zeros_like(values).to(final_rewards.dtype)
-        rewards[torch.arange(final_rewards.size(0)), final_token_index] = final_rewards
-        rewards = rewards - kl_penalties
-        rewards.masked_fill_(mask, 0.0)
-        delta = rewards - values
-        delta = delta + (gamma * F.pad(values, (0, 1), mode='constant', value=0)[:, 1:])
-        for t in reversed(range(max_resp_length)):
-           advantages[:,t] = (delta[:,t] + alpha * advantages[:, t + 1])
-        returns = advantages[:, :values.size(1)] + values
-        print(rewards)
-        print(delta)
-        print(advantages)
-        print(returns)
-        advantages = masked_whiten(advantages[:, :values.size(1)], response_mask)
+    # Placeholder return values
+    batch_size, resp_len = values.shape
+    dummy_advantages = torch.zeros((batch_size, resp_len), device=values.device)
+    dummy_returns = torch.zeros((batch_size, resp_len), device=values.device)
 
-    return advantages, returns
+    return dummy_advantages, dummy_returns
 
 
 # --- EXERCISE 4 END ---
@@ -776,8 +802,7 @@ def run_ppo_update_epoch(
     np.random.shuffle(indices)
     prompt_len = prompt_ids.shape[1]
     resp_len = response_ids.shape[1]
-    prompt_indices = np.arange(num_prompts)
-    
+    # prompt_indices = np.arange(num_prompts) # num_prompts is not defined here, and prompt_indices is not used.
 
     for i in range(0, num_samples, cfg.ppo.mini_batch_size):
         ppo_step_count += 1
@@ -803,8 +828,8 @@ def run_ppo_update_epoch(
         #    Be careful with slicing indices (use prompt_len, resp_len).
         #    Calculate log_softmax and gather logprobs for `batch_response_tokens`.
         #    Shape: (mini_batch, resp_len)
-        logprobs_new = torch.gather(log_softmax(logits_new_resp), dim=-1,
-                                    batch_response_tokens.unsqueeze(-1)).squeese(-1)
+        logprobs_new = torch.gather(F.log_softmax(logits_new_resp, dim=-1), 2, # Corrected: F.log_softmax, dim=2 for gather
+                                    batch_response_tokens.unsqueeze(-1)).squeeze(-1) # Corrected: squeeze
         #
         # 3. Extract New Values: Slice `values_new` to get values corresponding to response states.
         #    values_new_response = values_new[:, start_idx:end_idx]
