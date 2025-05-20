@@ -1,61 +1,61 @@
 # configs/config.yaml
 # Model & Tokenizer Configuration
 model:
-  name: "../hw12/sft_results_full_main/final_checkpoint" ## "google/gemma-2b-it"
-  tokenizer_name: "../hw12/sft_results_full_main/final_checkpoint" ## "google/gemma-2b-it"
-  trust_remote_code: true # Needed for Qwen
-  torch_dtype: "bfloat16"
+  name: "Qwen/Qwen1.5-1.8B-Chat" # Base model identifier from Hugging Face Hub or local path
+  tokenizer_name: "Qwen/Qwen1.5-1.8B-Chat" # Tokenizer identifier, usually same as model_name
+  trust_remote_code: true # Needed for some models like Qwen
+  torch_dtype: "bfloat16" # Data type for model weights (e.g., float32, float16, bfloat16)
 
 # Dataset & Task Configuration
 dataset:
-  name: "gsm8k"
-  config: "main"
-  split: "train" # Use train split for prompts
-  prompt_format: "Question: {question}\nAnswer:" # How to format the prompt
-  max_prompt_length: 512 # Max tokens for prompt
-  max_gen_length: 768  # Max tokens to generate for answer
+  name: "gsm8k" # Dataset name from Hugging Face Hub
+  config: "main" # Specific configuration of the dataset (if any)
+  split: "train" # Dataset split to use for prompts
+  prompt_format: "Question: {question}\nAnswer:" # Format string for creating prompts from dataset examples
+  max_prompt_length: 512 # Maximum number of tokens for the input prompt
+  max_gen_length: 256  # Maximum number of new tokens to generate for the answer (response part)
 
 # PPO Hyperparameters
 ppo:
-  learning_rate: 5.0e-7
-  epochs: 2        # Optimization epochs per rollout phase
-  batch_size: 16     # Rollout batch size (adjust based on VRAM)
-  mini_batch_size: 2 # Update mini-batch size (adjust based on VRAM)
-  gradient_accumulation_steps: 8 # Effective update batch size = mini_batch_size * grad_acc_steps
-  kl_coeff: 0.05     # KL penalty coefficient (beta)
-  clip_ratio: 0.2   # PPO policy objective clipping
-  clip_range_value: 0.2 # PPO value function clipping
-  vf_coeff: 0.1     # Value function loss weight
-  entropy_coeff: 0.01 # Entropy bonus weight
-  gamma: 0.99        # Discount factor
-  lam: 0.95         # GAE lambda
-  use_8bit_adam: true
-  max_grad_norm: 1.0
-  rollout_samples: 512
-  scheduler: "cosine_with_min_lr"
-  warmup_steps: 5
-  min_lr: 1.0e-7
+  learning_rate: 2.0e-6 # Learning rate for the AdamW optimizer
+  epochs: 2        # Number of optimization epochs to run on the same rollout data
+  batch_size: 8     # Number of prompts to process in parallel during rollouts (adjust based on VRAM)
+  mini_batch_size: 2 # Number of samples per mini-batch for PPO updates (adjust based on VRAM for training)
+  gradient_accumulation_steps: 8 # Accumulate gradients over N mini-batches before optimizer step
+  kl_coeff: 0.05     # Coefficient for the KL divergence penalty term (beta in PPO literature)
+  clip_ratio: 0.2   # Clipping parameter for the PPO policy objective (epsilon)
+  clip_range_value: 0.2 # Clipping parameter for the value function loss
+  vf_coeff: 0.1     # Weight for the value function loss in the total PPO loss
+  entropy_coeff: 0.01 # Weight for the entropy bonus term in the total PPO loss
+  gamma: 0.99        # Discount factor for future rewards in GAE
+  lam: 0.95         # Lambda parameter for Generalized Advantage Estimation (GAE)
+  use_8bit_adam: true # Whether to use 8-bit Adam optimizer (requires bitsandbytes and CUDA)
+  max_grad_norm: 1.0  # Maximum norm for gradient clipping
+  rollout_samples: 512 # Total number of samples to generate during each rollout phase
+  scheduler: "cosine_with_min_lr" # Learning rate scheduler type
+  warmup_steps: 5     # Number of warmup steps for the learning rate scheduler
+  min_lr: 1.0e-7      # Minimum learning rate for schedulers like cosine
 
 # Training Control
 training:
-  total_ppo_steps: 100 # Number of PPO steps (Rollout -> Update)
-  seed: 42
-  log_interval: 1   # Log metrics every N PPO steps
-  save_interval: 10 # Save model every N PPO steps
-  output_dir: "outputs/ppo_gsm8k_${model.name}" # Sanitize model name, use model name in output
-  device: "cuda"    # Set to "cpu" for CPU execution (use with debug config)
-  gradient_checkpointing: true
+  total_ppo_steps: 100 # Total number of PPO steps (Rollout -> Update cycles) to perform
+  seed: 42             # Random seed for reproducibility
+  log_interval: 1      # Log metrics every N PPO steps
+  save_interval: 10    # Save model checkpoint every N PPO steps
+  output_dir: "outputs/ppo_gsm8k_${model.name}" # Base directory for saving outputs (model name is interpolated)
+  device: "cuda"       # Training device: "cuda" for GPU, "cpu" for CPU
+  gradient_checkpointing: true # Enable gradient checkpointing in the model to save memory
 
 # Generation settings for rollouts
 generation:
-  max_new_tokens: ${dataset.max_gen_length} # Reference value from dataset section
-  min_new_tokens: 5
-  temperature: 0.7
-  top_k: 50
-  top_p: 0.95
-  do_sample: true
+  max_new_tokens: ${dataset.max_gen_length} # Max new tokens during generation, references dataset.max_gen_length
+  min_new_tokens: 5      # Minimum number of new tokens to generate
+  temperature: 0.7       # Sampling temperature for generation
+  top_k: 50              # Top-k filtering for generation
+  top_p: 0.95            # Top-p (nucleus) filtering for generation
+  do_sample: true        # Whether to use sampling; if false, uses greedy decoding
 
-wandb:
-  report_to_wandb: true
-  project: "tinier-zero"
-  name: null 
+wandb: # Weights & Biases logging configuration
+  report_to_wandb: true # Set to false to disable wandb logging
+  project: "tinier-zero"  # Wandb project name
+  name: null # Wandb run name (null for auto-generated, or set a custom name)
