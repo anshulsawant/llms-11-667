@@ -34,24 +34,38 @@ llms-11-667/hw12/
 git clone https://github.com/anshulsawant/llms-11-667.git
 cd llms-11-667/hw12 
 ```
-**b. Create Virtual Environment**
+**b. Create Virtual Environment (Python 3.11 Recommended)**
+It's recommended to use Python 3.11 for this project.
 ```bash
-python -m venv hw12
-source hw12/bin/activate  # On Windows use `hw12\Scripts\activate`
+# Ensure you have Python 3.11 installed. 
+# You might need to use python3.11 instead of python depending on your system.
+python3.11 -m venv cmu-11967-hw12 
+source cmu-11967-hw12/bin/activate  # On Windows use `cmu-11967-hw12\Scripts\activate`
 ```
+*Alternatively, if you prefer Conda:*
+```bash
+# bash setup-conda.sh && source ~/.bashrc # If you haven't installed conda
+# conda create -n cmu-11967-hw12 python=3.11
+# conda activate cmu-11967-hw12
+```
+
 **c. Install Requirements**
 ```bash
 pip install -r requirements.txt
 ```
-**d. Install Project Package**
+**d. Install Project Package (Editable Mode)**
 ```bash
 pip install -e .
 ```
-**e. Hugging Face Authentication** (`huggingface-cli login`)
+**e. Authenticate Services**
+```bash
+huggingface-cli login
+wandb login
+```
+*(You will need accounts for Hugging Face and Weights & Biases.)*
 
-**f. Weights & Biases Authentication** (`wandb login`)
-
-  * [ ] **g. Hardware Requirements** (Full SFT needs high VRAM, LoRA is more efficient)
+**g. Hardware Requirements** 
+Full SFT typically requires significant VRAM (e.g., A100 or H100 GPUs). LoRA is more memory-efficient and can often run on consumer-grade GPUs with sufficient VRAM (e.g., RTX 3090/4090). Check model and batch size configurations.
 
 ## 2. Configuration
 
