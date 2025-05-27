@@ -1,6 +1,5 @@
-# CS11-967: LLM Engineering
-
-This repository contains materials for the CS11-967 LLM Engineering course, including homework assignments, projects, and notes.
+# CS11-967: Large Languge Models and Applications
+This repository contains materials for the CS11-967 Large Languge Models and Applications course, including homework assignments, projects, and notes.
 
 ## Homework Assignments
 
